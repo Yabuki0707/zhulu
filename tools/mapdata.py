@@ -10,6 +10,7 @@
         自然地球/                  Natural Earth 10m（底图、河流湖泊、现代国界与一级政区）
         中华县级/                  GADM 4.1 中华县级 + 阿里 DataV 备选
         高程与地表/                ETOPO 全球高程 + Copernicus 土地覆盖
+        气候/                      柯本气候分类（Beck et al. 2023，1 km；沙漠/草原判据）
         唐至明政区/                Hartwell CHGIS V5（唐 741 → 明 1391）
         历史水系/                  CHGIS 1820 水系与时间序列面（参照）
         日本德川/                  国 / 道 / 藩
@@ -23,6 +24,7 @@
         高程_降采样.npy            备用：降采样高程（改地形分类规则时不必重读原图）
         起伏_降采样.npy            备用：格内极差（分丘陵/山地/高原的依据）
         植被_降采样.npy            备用：LC100 主导类（森林/农田/灌丛…的依据）
+        气候_降采样.npy            备用：柯本主导气候类（沙漠/草原/苔原判据的来源）
 """
 from __future__ import annotations
 
@@ -55,6 +57,7 @@ GRID_META = under("栅格", "台账.json")
 GRID_ELEV = under("栅格", "高程_降采样.npy")
 GRID_RELIEF = under("栅格", "起伏_降采样.npy")
 GRID_VEG = under("栅格", "植被_降采样.npy")
+GRID_CLIMATE = under("栅格", "气候_降采样.npy")
 
 # ---------------- 原始数据 ----------------
 RAW = under("原始数据")
@@ -62,6 +65,7 @@ NE_DIR = under("原始数据", "自然地球")
 CN_DIR = under("原始数据", "中华县级")
 FOREIGN_DIR = under("原始数据", "外国县级")
 TERRAIN_DIR = under("原始数据", "高程与地表")
+CLIMATE_DIR = under("原始数据", "气候")
 HARTWELL_DIR = under("原始数据", "唐至明政区")
 CHGIS_DIR = under("原始数据", "历史水系")
 JAPAN_DIR = under("原始数据", "日本德川")
@@ -102,6 +106,9 @@ LC100_TIF = LANDCOVER_TIF
 # （lat −18° 以南整片是 0），**2026-10-07 深夜 已删**。这个常量留在原地只是为了将来若放入一份
 # 可信的裸数组时，terrain.validate_raw() 能自动发现并自检启用；没有它就走 TIFF 流式解瓦片。
 LC100_RAW = os.path.join(TERRAIN_DIR, "numpy")
+# 柯本气候分类（Beck et al. 2023, CC BY 4.0）：沙漠/草原/苔原的**气候判据**来源，
+# 取代原先那几个 Natural Earth 手绘沙漠面（见 tools/climate.py、设计笔记03 §14.11）。
+KOPPEN_ZIP = os.path.join(CLIMATE_DIR, "koppen_geiger_tif.zip")
 HARTWELL_ZIP = os.path.join(HARTWELL_DIR, "Hartwell_唐至明政区_2010.zip")
 CHGIS_WATER = os.path.join(CHGIS_DIR, "CHGIS_1820_水系.zip")
 CHGIS_PROV = os.path.join(CHGIS_DIR, "CHGIS_时间序列_省级面.zip")

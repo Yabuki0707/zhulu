@@ -1,0 +1,1 @@
+{"encoding": "beck2023-v3", "member": "1991_2020/koppen_geiger_0p00833333.tif", "source": "Beck et al. 2023, CC BY 4.0"}

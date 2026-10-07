@@ -7,6 +7,7 @@
     python tools/fetch_map_data.py --group core          # 下载核心集（底图 + 汉地行政图）
     python tools/fetch_map_data.py --group basins        # 下载流域底（边地地块划分用）
     python tools/fetch_map_data.py --group foreign       # 下载外国县一级（53 国，约 15 MB）
+    python tools/fetch_map_data.py --group climate       # 下载柯本气候分类（130 MB，沙漠判据）
     python tools/fetch_map_data.py --group all
 
 全部落到 地图/地图数据/原始数据/。已存在且大小相符的文件跳过；不符则续传。
@@ -19,6 +20,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+import urllib.parse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -133,6 +135,36 @@ ITEMS += [(("foreign", "外国县级", f"{zh}_县级_GADM41_2.json.zip",
             f"{zh}二级政区面（GADM 4.1 level 2）"))
           for iso, zh, n in FOREIGN_L2]
 
+# ---- 气候：柯本气候分类（Beck et al. 2023，CC BY 4.0）----
+# 「沙漠 = LC100 裸地 ∧ 干旱气候」的判据来源，取代 Natural Earth 的手绘沙漠面
+# （见 tools/climate.py 与 设计笔记03 §14.11）。包里 73 个文件，管线只用现值期那一幅：
+#   1991_2020/koppen_geiger_0p00833333.tif
+# ⚠️ 这个源在 AWS WAF 后面：裸的 urllib UA 只会拿到 `x-amzn-waf-action: challenge`
+#    （HTTP 202 + 0 字节）。必须带浏览器那一套请求头，见下面的 HOST_HEADERS。
+ITEMS += [("climate", "气候", "koppen_geiger_tif.zip",
+           "https://figshare.com/ndownloader/files/61012822", 130618411,
+           "柯本气候分类 1901–2099（Beck et al. 2023, CC BY 4.0）；现值期 1991–2020 的 1 km 那幅是干旱判据")]
+
+
+# 需要浏览器请求头的源（host 后缀 → 头字典）。figshare 前面挂着 AWS WAF 的人机校验，
+# 裸 UA 一律 202 + 0 字节；实测带这一套就 200。
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+HOST_HEADERS = {
+    "figshare.com": {
+        "User-Agent": BROWSER_UA,
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,*/*;q=0.8"),
+        "Accept-Language": "en-US,en;q=0.9",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124"',
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
+    },
+}
+
 
 def human(n: int) -> str:
     return f"{n / 1048576:.1f}MB" if n >= 1048576 else f"{n / 1024:.0f}KB"
@@ -174,7 +206,12 @@ def download(item, retries: int = 3) -> bool:
         resume = 0
 
     for attempt in range(1, retries + 1):
-        req = urllib.request.Request(url, headers={"User-Agent": "zhuilu-map-fetch/1.0"})
+        host = urllib.parse.urlsplit(url).netloc.lower()
+        hdrs = {"User-Agent": "zhuilu-map-fetch/1.0"}
+        for suffix, extra in HOST_HEADERS.items():
+            if host == suffix or host.endswith("." + suffix):
+                hdrs.update(extra)
+        req = urllib.request.Request(url, headers=hdrs)
         if resume:
             req.add_header("Range", f"bytes={resume}-")
         try:
@@ -209,7 +246,7 @@ def download(item, retries: int = 3) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--group", default="core",
-                    choices=["core", "basins", "modern", "foreign", "all"])
+                    choices=["core", "basins", "modern", "foreign", "climate", "all"])
     ap.add_argument("--list", action="store_true")
     args = ap.parse_args()
 
@@ -220,7 +257,8 @@ def main() -> int:
             print(f"{state(it):<10}{it[0]:<8}{human(want) if want else '?':<9}{sub}/{name}  — {desc}")
         return 0
 
-    want_groups = {"core", "basins", "modern", "foreign"} if args.group == "all" else {args.group}
+    want_groups = ({"core", "basins", "modern", "foreign", "climate"}
+                   if args.group == "all" else {args.group})
     todo = [it for it in ITEMS if it[0] in want_groups]
     print(f"目标目录: {RAW}")
     print(f"待处理 {len(todo)} 项")

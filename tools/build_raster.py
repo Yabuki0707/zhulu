@@ -14,6 +14,7 @@
   基础单元.json                     由 build_editor.py --dump-units 产出
   原始数据/高程与地表/全球高程_ETOPO_60秒.tif      ETOPO 2022 60s 高程（NOAA，公有领域）
   原始数据/高程与地表/全球土地覆盖_100米.tif       Copernicus LC100 离散分类（森林/雨林等）
+  原始数据/气候/koppen_geiger_tif.zip            柯本气候分类（Beck et al. 2023）→ 沙漠判据
   （LC100 的满分辨率裸数组曾在此，2026-10-07 深夜 已删：它是残件。见 #15.3）
   原始数据/自然地球/*.zip                         陆地 / 湖泊 / 冰川 / 具名地貌 / 河流掩膜
   原始数据/唐至明政区/Hartwell_*.zip               参考层的唐 741 州面
@@ -23,8 +24,8 @@
   分区编码.png   同上，0 = 无块区；块区隶属于地块 —— 初始全空，由编辑器绘制
   地形编码.png   8 位灰度，值 = 16 类地形编码（见 tools/terrain.py 的 LEGEND）
   参考顶点.bin   **矢量顶点**（现代单元边界 + 唐 741 州面）—— 参考层不再是栅格掩膜
-  台账.json      网格几何 / 地形图例 / 陆地口径 / 地块台账
-  高程_降采样.npy 起伏_降采样.npy 植被_降采样.npy   中间层（改分类规则时不必重读原图）
+  台账.json      网格几何 / 地形图例 / 陆地口径 / 沙漠判据 / 地块台账
+  高程_降采样.npy 起伏_降采样.npy 植被_降采样.npy 气候_降采样.npy   中间层（改分类规则时不必重读原图）
 
 **海洋口径只有一处**：陆地 = Natural Earth 10m 陆地 ∪ 湖泊 ∪ 冰川区（格心命中）。
 地形层的「海洋」是该掩膜的补集，地块层也被它裁掉 —— 于是「地块不可能落在海洋上」
@@ -54,8 +55,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geo_wrap import wrap_into                     # noqa: E402
 from mapdata import (ROOT, under, UNITS as UNITS_JSON, RASTER, NE_DIR,      # noqa: E402
                      NE_LAND, NE_LAKES, NE_RIVERS, NE_REGIONS, NE_GLACIATED,
-                     ETOPO_TIF, LC100_TIF, LC100_RAW, HARTWELL_ZIP, URL_PREFIX)
+                     ETOPO_TIF, LC100_TIF, LC100_RAW, HARTWELL_ZIP, URL_PREFIX,
+                     KOPPEN_ZIP)
 import terrain as TR                                                    # noqa: E402
+import climate as CL                                                    # noqa: E402
 from refvec import build_ref_vector                                     # noqa: E402
 from basetag import base_tag as make_base_tag                           # noqa: E402
 from basetag import name_tag as _bt_name_tag, legend_tag as _bt_legend_tag   # noqa: E402
@@ -69,6 +72,7 @@ OUT = RASTER
 F_PLOT, F_DIST, F_TERRAIN, F_REFV, F_META = (
     "地块编码.png", "分区编码.png", "地形编码.png", "参考顶点.bin", "台账.json")
 F_ELEV, F_RELIEF, F_VEG = "高程_降采样.npy", "起伏_降采样.npy", "植被_降采样.npy"
+F_CLIMATE = "气候_降采样.npy"
 
 LON0, LON1 = 25.0, 236.0
 LAT0, LAT1 = -56.0, 82.0
@@ -122,6 +126,120 @@ def encode_id(a: np.ndarray) -> np.ndarray:
     rgb[..., 0] = a & 0xFF
     rgb[..., 1] = (a >> 8) & 0xFF
     return rgb
+
+
+def supercover(a, b):
+    """两点之间按 ≤1 格步长走 supercover，返回格子列表（含两端，保证 4 邻接连通）。
+
+    与 `burn_lines` 里的 walk 同一套补格规则：遇到"横纵同时跨一格"的对角步就补一格正交格。
+    单独抽出来是因为河流封缝也要用（见 seal_river_gaps）。
+    """
+    cells = []
+    dr, dc = b[0] - a[0], b[1] - a[1]
+    n = int(np.ceil(max(abs(dr), abs(dc)))) + 1
+    py = px = None
+    for i in range(n + 1):
+        t = i / n
+        cy, cx = int(np.floor(a[0] + dr * t)), int(np.floor(a[1] + dc * t))
+        cells.append((cy, cx))
+        if px is not None and abs(cy - py) == 1 and abs(cx - px) == 1:
+            cells.append((py, cx))          # 对角步补一格 → 4 邻接
+        py, px = cy, cx
+    return cells
+
+
+def seal_river_gaps(terrain: np.ndarray, value: int, water, log=print) -> int:
+    """把同一条河被**折线端点错位**切出的 ≤3 格缝接上。返回封了几处。
+
+    为什么 `burn_lines` 之后还需要这一步：NE 的 `rivers_lake_centerlines` 是**概化**过的
+    线网，它自己在湖泊两端与支流汇口处会把线切断，而两条折线的端点并不重合。实测长江的
+    MultiLineString 就分 3 段，淮河入江口那处两端点差 **2 格**（119.56E 32.25N）——
+    4 邻接断开，屏幕上就是"断流"。`burn_lines` 只保证**单条折线内部** 4 邻接连通，
+    管不了折线与折线之间的缝（修完那一层，全图 4 邻接碎段 6,834 → 265，剩下的 265 里
+    有 10 处是这种端点缝）。
+
+    判据取**保守**（宁漏不滥，接错了比断着更难看）：
+
+      · 只在**骨架端点**之间连 —— 端点是"线头"；线的腰部不能当端点用。
+      · 只连 ≤3.5 格（≈24 km）的缝；其中 ≤2 格的无条件连，>2 格的**要有一端的朝向
+        指着对方**（否则可能把两条本来不相干的河接上）。
+      · 每个线头最多用一次（按距离贪心，先近后远）。
+      · 桥经过的格子若已是**海洋或湖泊**就不封：海是真正的分隔；湖与河同为蓝色，
+        视觉上本来就不算断（把湖改成河反而是改错了东西）。
+    """
+    from scipy import ndimage
+    from skimage.morphology import skeletonize
+
+    H, W = terrain.shape
+    riv = terrain == value
+    if int(riv.sum()) < 3:
+        return 0
+    st4 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], np.uint8)
+    st8 = np.ones((3, 3), np.uint8)
+    st8[1, 1] = 0
+    lab, n0 = ndimage.label(riv, structure=st4)
+    skel = skeletonize(riv)
+    ends = np.argwhere(skel & (ndimage.convolve(skel.astype(np.uint8), st8,
+                                                mode="constant", cval=0) == 1))
+
+    def out_dir(r, c, steps=4):
+        """从线头沿骨架向内走若干格，返回**朝外**的单位方向（(dy, dx)）。"""
+        prev, cur, seen = None, (int(r), int(c)), {(int(r), int(c))}
+        for _ in range(steps):
+            nxt = None
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = cur[0] + dr, cur[1] + dc
+                    if 0 <= nr < H and 0 <= nc < W and skel[nr, nc] and (nr, nc) not in seen:
+                        nxt = (nr, nc)
+                        break
+                if nxt:
+                    break
+            if not nxt:
+                break
+            seen.add(nxt)
+            prev, cur = cur, nxt
+        if prev is None:
+            return None
+        dy, dx = cur[0] - r, cur[1] - c
+        n = (dy * dy + dx * dx) ** 0.5
+        return (-dy / n, -dx / n) if n else None
+
+    pairs = []
+    for i in range(len(ends)):
+        ri, ci = ends[i]
+        for j in range(i + 1, len(ends)):
+            rj, cj = ends[j]
+            if lab[ri, ci] == lab[rj, cj]:
+                continue                                # 同一段，不用接
+            d = float(((ri - rj) ** 2 + (ci - cj) ** 2) ** 0.5)
+            if d > 3.5:
+                continue
+            vy, vx = (rj - ri) / d, (cj - ci) / d
+            di, dj = out_dir(ri, ci), out_dir(rj, cj)
+            ai = di[0] * vy + di[1] * vx if di else 0.0                # i 是否朝着 j
+            aj = dj[0] * -vy + dj[1] * -vx if dj else 0.0              # j 是否朝着 i
+            if d <= 2.05 or ai >= 0.5 or aj >= 0.5:
+                pairs.append((d, (int(ri), int(ci)), (int(rj), int(cj))))
+    pairs.sort(key=lambda t: t[0])
+
+    used, sealed = set(), 0
+    for _d, a, b in pairs:
+        if a in used or b in used:
+            continue
+        used.add(a)
+        used.add(b)
+        cells = [(y, x) for y, x in supercover(a, b) if 0 <= y < H and 0 <= x < W]
+        if any(terrain[y, x] in water for y, x in cells):
+            continue
+        for y, x in cells:
+            terrain[y, x] = value
+        sealed += 1
+    n1 = int(ndimage.label(terrain == value, structure=st4)[1])
+    log(f"  河流封缝：{len(ends)} 个线头 → 封 {sealed} 处（4 邻接碎段 {n0} → {n1}）")
+    return sealed
 
 
 def name_tag(seeds) -> str:
@@ -273,6 +391,19 @@ def main() -> int:
                                 for t in show) + "）")
         terrain = TR.classify(elev, relief, veg, land, LAT)   # lat 用于林型的权重制
 
+        # 柯本气候类（沙漠/干旱的判据来源）。读它只为了一件事：**取代表时代替手绘面**。
+        # 缓存成 (H, W) uint8 的类栅格而不是布尔掩膜 —— 将来要按气候带细分草原/苔原，
+        # 改规则不必重读 130 MB 的 TIFF。
+        klim = None
+        if not args.no_veg:
+            klim = CL.koppen_from_zip(W, H, cell, LON0, LAT1, KOPPEN_ZIP,
+                                      cache_path=os.path.join(OUT, F_CLIMATE))
+            if klim is not None:
+                arid = np.isin(klim, CL.ARID)
+                print(f"  气候层：{CL.summarise(klim, 6)}")
+                print(f"    干旱气候（BWh/BWk/BSh/BSk）{int(arid.sum()):,} 格"
+                      f"（占全图 {arid.mean() * 100:.1f}%）")
+
         def burn(feats, value, label, buf=0.0, filt=None, only_from=None, only_veg=None):
             """only_from：只允许覆盖这些**既有地形类**；only_veg：只允许覆盖这些**土地覆盖候选**。
             后者才是"形状由 LC100 定"的正解 —— 按 LC100 判形状，不管当前是裸地还是高原
@@ -347,26 +478,42 @@ def main() -> int:
 
         # Natural Earth 在这条管线里只干两件事：
         #   ① 水体与冰雪（湖泊/河流/冰川）——物理事实，土地覆盖产品分不了这么细；
-        #   ② 沙漠/苔原的**细化**——且只允许覆盖"本来就没森林"的类（only_from），
-        #      否则会把泰加林盖成苔原、把雨林边缘盖成沙漠。
+        #   ② 苔原的**细化**——且只允许覆盖"本来就没森林"的类，否则会把泰加林盖成苔原。
         # **高原与山脉不再烧**：那是地理区划的手绘椭圆块（一条条褐色团），
         # 形态交给高程 + 格内极差（terrain.landform），出来的是真实山系。
-        # 沙漠 / 苔原：**形状由 LC100 定，NE 只当"气候区"标签**。
-        # NE 那几个沙漠面是 1:1000 万手绘的（边界几十个顶点），拿它当形状就会画出一大团
-        # 光溜溜的椭圆——实测被需求方一眼看出"沙漠过于平滑"。反过来用才对：
-        # 在 NE 沙漠区里，只把 LC100 已经判成「裸地」的像元改记「沙漠」，
-        # 于是沙漠的每条边都来自 100 米数据（与裸岩、河谷、绿洲咬合），NE 的形状看不见了。
-        # 沙漠区里 LC100 说是草/灌丛的边缘，就老实留着草原——半荒漠草原本来就是草原。
+        #
+        # **沙漠不再用 NE 的手绘面**（2026-10-08 改，需求方报"沙漠边界太平滑"）。
+        # 老做法是「NE 沙漠面内 ∧ LC100 裸地 → 沙漠」，可那个面**仍是掩膜**：面内的边是
+        # LC100 的，**外轮廓与交界仍是 NE 的**。实测那条缝外侧 25.5% 仍是 LC100 裸地
+        # （同一片裸地被切成两半），最长一段 207 km 笔直；同为裸露地表，沙漠的周长/√面积
+        # = 34.9、裸地 114.3（面积相当却光滑 3.3 倍）。NE 的 Desert 面平均只有 76 个顶点
+        # （58 个面共 4,434 点；戈壁整个只有 100 个）—— 原数据就这么粗。
+        #
+        # 改用**气候**当那层判据：柯本 BWh/BWk/BSh/BSk = 干旱。
+        #   沙漠 = LC100 判「裸地」 ∧ 干旱气候
+        # 于是沙漠的每一条边都来自数据（100 米土地覆盖，或 1 km 气候分类），NE 那一层
+        # 彻底不要。同一条判据下 BSh/BSk（草原气候）区里的裸地仍记「裸地」——
+        # 半荒漠草原本来就是草原，这与 §14.11 的口径一致。
+        # 详见 tools/climate.py 与 `设计笔记03` §14.11。
         REG = ne_features(NE_REGIONS)
-        burn(REG, T_DESERT, "沙漠（NE 沙漠区内，凡 LC100 判「裸地」的格 → 沙漠）",
-             filt=lambda r: r.get("FEATURECLA") == "Desert", only_veg=(T_BARE,))
-        burn(REG, T_TUNDRA, "苔原（NE 苔原区内，LC100 的裸地/草原/苔藓 → 苔原）",
-             filt=lambda r: r.get("FEATURECLA") == "Tundra",
-             only_veg=(T_BARE, T_GRASS, T_TUNDRA))
+        if klim is not None:
+            dry = np.isin(klim, CL.ARID) & (veg == T_BARE) & land.astype(bool)
+            terrain[dry] = T_DESERT
+            print(f"  沙漠（LC100 裸地 ∧ 柯本干旱气候）：{int(dry.sum()):,} 格")
+        elif veg is not None:
+            burn(REG, T_DESERT, "沙漠（退路：NE 沙漠面内 LC100 裸地 → 沙漠）",
+                 filt=lambda r: r.get("FEATURECLA") == "Desert", only_veg=(T_BARE,))
+        else:
+            print("  ! 既无柯本气候也无 LC100：沙漠层跳过（否则会把森林盖成沙漠）")
+        if veg is not None:
+            burn(REG, T_TUNDRA, "苔原（NE 苔原区内，LC100 的裸地/草原/苔藓 → 苔原）",
+                 filt=lambda r: r.get("FEATURECLA") == "Tundra",
+                 only_veg=(T_BARE, T_GRASS, T_TUNDRA))
         burn(ne_features(NE_GLACIATED), T_ICE, "冰川")
         burn(ne_features(NE_LAKES), T_LAKE, "湖泊")
         # 河用"按折线点燃"而不是 burn：折线要**保证 4 邻接连通**，否则缩小时断流（见 burn_lines）
         burn_lines(ne_features(NE_RIVERS), T_RIVER, "河流")
+        seal_river_gaps(terrain, T_RIVER, (T_OCEAN, T_LAKE), log=print)
     terrain[land == 0] = T_OCEAN                  # 海洋口径收口
     # 内海 / 大湖：里海、贝加尔、死海、五大湖在 Natural Earth 里属于"海洋层"（不在湖泊层），
     # 光靠 NE 会把它们记成「海洋」。LC100 自己分得很干净 —— 内陆水体是 80、开阔海是 200
@@ -401,6 +548,12 @@ def main() -> int:
         "terrain_encoding": "8 位灰度，值 = terrain_legend 的下标（16 类）",
         "land_rule": "陆地 = Natural Earth 10m 陆地 ∪ 湖泊 ∪ 冰川区（格心命中）；"
                      "地形层的「海洋」是该掩膜的补集，地块层也被它裁过",
+        "desert_rule": "沙漠 = LC100 判「裸地」 ∧ 柯本干旱气候(BWh/BWk/BSh/BSk)；"
+                       "Natural Earth 的手绘沙漠面不再参与（2026-10-08 改，见 设计笔记03 §14.11）",
+        "climate": {"source": "Beck et al. 2023, Scientific Data 10:724（CC BY 4.0）",
+                    "member": CL.KOPPEN_MEMBER,
+                    "grid": "1 km（0.00833333°），现值期 1991–2020",
+                    "arid": list(CL.ARID)},
         "ref_encoding": "参考顶点.bin：ZLRV1 魔数 + 环表 + 格坐标×8 的 uint16 顶点对",
         "base_tag": base_tag,
         "districts": [],
