@@ -89,6 +89,20 @@ FAM_MIXED = 19                    # 混交（115 / 116 / 125 / 126）
 N_CAND = 20
 FAM_NAMES = {FAM_EGBROAD: "常绿阔叶系", FAM_NEEDLE: "针叶系", FAM_BROAD: "阔叶系", FAM_MIXED: "混交系"}
 VEG_ENCODING = "family-v1"        # 换了编码就往缓存旁边写这个标记，对不上就不复用
+WATER_ENCODING = "waterfrac-v1"   # 水体占比层的缓存标记（LC100 80∪200 占有效样本的百分比）
+
+# 水体占比的用法：**逐格取众数会把"碎成几块的水"藏起来**。实测长江口有一格
+# 45% 是水像素（80/200 各占一部分），可单一类最多的是农田（LC100 40），取众数就记成
+# 「平原」——于是长江口整片成了陆地色，河到 119.6°E 就"断"了（见 `设计笔记03` §14.13）。
+# 修法：一格的水体占比 ≥ WATER_PCT 且**与既有水面 4 邻接**时，补成水面。
+# 加"邻接"是为了不动海岸线：孤立的 30% 水格（滩涂、灌溉水田）不该变成河。
+WATER_PCT = 30                    # 判"这格是水"的占比门槛（百分数）
+
+
+def water_frac_note() -> str:
+    """给调用方（台账 / 日志）用的一句话说明，避免口径再被抄错。"""
+    return (f"水体占比 = LC100 的 80（内陆水）∪ 200（开阔海）占格内有效样本的百分比；"
+            f"≥ {WATER_PCT}% 且与既有水面 4 邻接者补成水面（逐格众数会把碎水藏起来）")
 
 # ---------------------------------------------------------------- LC100 常量
 LC100_SHAPE = (141120, 362880)    # 80 N → 60 S / 180 W → 180 E
@@ -233,8 +247,14 @@ def _lut() -> np.ndarray:
     return lut
 
 
-def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, cs=3, log=print):
-    """逐格取 rs × cs 个样本的**主导候选**（16 类 + 4 族）。read_strip(row) → 该行窗口内的列。"""
+def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, cs=3, log=print,
+                         water_path=None):
+    """逐格取 rs × cs 个样本的**主导候选**（16 类 + 4 族）。read_strip(row) → 该行窗口内的列。
+
+    同时算出**水体占比**层（LC100 的 80 内陆水 ∪ 200 开阔海 占有效样本的百分比）。
+    为什么不另读一遍：LUT 已经把这两个码映射成 T_LAKE/T_OCEAN，所以水体计数就是
+    `cnt` 的两列之和——白拿。为什么需要它：见 `water_frac_note()`。
+    """
     x = np.arange(W)
     lon_s = lon0 + (x[:, None] + (np.arange(cs)[None, :] + 0.5) / cs) * cell      # (W, cs)
     cols = np.round(_lc_cols(lon_s)).astype(np.int64)
@@ -244,6 +264,7 @@ def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, c
     lut = _lut()
 
     veg = np.full((H, W), VEG_UNKNOWN, np.uint8)
+    water = np.zeros((H, W), np.uint8)                     # 水体占比（百分数，0–100）
     cells_idx = np.repeat(x, cs).astype(np.int64)                              # (W*cs,)
     for y in range(H):
         lat_s = lat1 - (y + (np.arange(rs) + 0.5) / rs) * cell
@@ -257,11 +278,23 @@ def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, c
                 continue
             flat = cells_idx[keep] * N_CAND + cls.ravel()[keep]
             cnt += np.bincount(flat, minlength=W * N_CAND)
-        tot = cnt.reshape(W, N_CAND).sum(axis=1)
-        best = cnt.reshape(W, N_CAND).argmax(axis=1).astype(np.uint8)
+        g = cnt.reshape(W, N_CAND)
+        tot = g.sum(axis=1)
+        best = g.argmax(axis=1).astype(np.uint8)
         veg[y] = np.where(tot > 0, best, VEG_UNKNOWN)
+        w = g[:, T_OCEAN] + g[:, T_LAKE]                    # 水体 = 开阔海 + 内陆水
+        water[y] = np.where(tot > 0, np.round(w * 100.0 / np.maximum(tot, 1)), 0).astype(np.uint8)
         if log and (y % 200 == 0 or y == H - 1):
-            log(f"    植被 {y + 1}/{H} 行")
+            log(f"    植被/水体 {y + 1}/{H} 行")
+    if water_path:
+        try:
+            np.save(water_path, water)
+            with open(water_path + ".tag", "w", encoding="utf-8") as f:
+                json.dump({"encoding": WATER_ENCODING}, f)
+            log(f"  水体占比层已缓存 {os.path.basename(water_path)}"
+                f"（{water.nbytes / 1048576:.1f} MB）")
+        except Exception as e:                                                # noqa: BLE001
+            log(f"  ! 水体占比层缓存失败：{e}")
     if cache_path:
         try:
             np.save(cache_path, veg)
@@ -270,7 +303,7 @@ def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, c
             log(f"  植被层已缓存 {os.path.basename(cache_path)}（{veg.nbytes / 1048576:.1f} MB）")
         except Exception as e:                                                # noqa: BLE001
             log(f"  ! 植被层缓存失败：{e}")
-    return veg
+    return veg, water
 
 
 class _RawStrip:
@@ -380,25 +413,32 @@ def validate_raw(raw_path, tif_path, log=print) -> bool:
     return True
 
 
-def _cache_ok(cache_path):
+def _cache_ok(cache_path, encoding=VEG_ENCODING):
     """缓存旁边有编码标记、且与当前编码一致才复用（换过编码的旧缓存必须重算）。"""
     try:
         with open(cache_path + ".tag", encoding="utf-8") as f:
-            return json.load(f).get("encoding") == VEG_ENCODING
+            return json.load(f).get("encoding") == encoding
     except Exception:                                                         # noqa: BLE001
         return False
 
 
 def veg_from_landcover(W, H, cell, lon0, lon1, lat0, lat1, raw_path, tif_path, cache_path,
-                       use_raw=False, log=print):
-    """→ (H, W) uint8 候选标号（VEG_UNKNOWN = 无数据）；两个源都没有则返回 None。"""
+                       use_raw=False, log=print, water_path=None):
+    """→ (veg, water)：候选标号 (H,W) uint8（VEG_UNKNOWN = 无数据）+ 水体占比 (H,W) uint8 百分数。
+
+    两个源都没有则返回 (None, None)。水体占比的用途见 WATER_PCT 上面的说明。
+    """
     say = log or (lambda *a, **k: None)
-    if cache_path and os.path.exists(cache_path) and _cache_ok(cache_path):
+    if (cache_path and os.path.exists(cache_path) and _cache_ok(cache_path)
+            and (not water_path or (os.path.exists(water_path)
+                                    and _cache_ok(water_path, WATER_ENCODING)))):
         try:
             a = np.load(cache_path)
-            if a.shape == (H, W):
-                say(f"  植被层读缓存 {os.path.basename(cache_path)}")
-                return a.astype(np.uint8)
+            w = np.load(water_path) if water_path else np.zeros((H, W), np.uint8)
+            if a.shape == (H, W) and w.shape == (H, W):
+                say(f"  植被层读缓存 {os.path.basename(cache_path)}"
+                    + (f" + {os.path.basename(water_path)}" if water_path else ""))
+                return a.astype(np.uint8), w.astype(np.uint8)
         except Exception:                                                     # noqa: BLE001
             pass
     src = None
@@ -410,8 +450,9 @@ def veg_from_landcover(W, H, cell, lon0, lon1, lat0, lat1, raw_path, tif_path, c
         src = _TifStrip(tif_path, lon0, lon1, log=say)
     if src is None:
         say("  ! 没有 LC100（裸数组与 TIFF 都缺），植被类只能靠高程与掩膜推断")
-        return None
-    return _dominant_from_parts(W, H, cell, lon0, lat1, src, cache_path, log=say)
+        return None, None
+    return _dominant_from_parts(W, H, cell, lon0, lat1, src, cache_path, log=say,
+                                water_path=water_path)
 
 
 # ================================================================ 分类

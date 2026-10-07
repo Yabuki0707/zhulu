@@ -11,6 +11,7 @@
         中华县级/                  GADM 4.1 中华县级 + 阿里 DataV 备选
         高程与地表/                ETOPO 全球高程 + Copernicus 土地覆盖
         气候/                      柯本气候分类（Beck et al. 2023，1 km；沙漠/草原判据）
+        河流/                      HydroRIVERS v1.0 河网（HydroSHEDS；NE 河流的替代/补充）
         唐至明政区/                Hartwell CHGIS V5（唐 741 → 明 1391）
         历史水系/                  CHGIS 1820 水系与时间序列面（参照）
         日本德川/                  国 / 道 / 藩
@@ -70,6 +71,7 @@ HARTWELL_DIR = under("原始数据", "唐至明政区")
 CHGIS_DIR = under("原始数据", "历史水系")
 JAPAN_DIR = under("原始数据", "日本德川")
 BASINS_DIR = under("原始数据", "流域")
+HYDRO_RIVERS_DIR = under("原始数据", "河流")
 
 # 常用原始件（文件名也中文；URL 里的原文件名见 tools/fetch_map_data.py 清单）
 NE_COAST = os.path.join(NE_DIR, "海岸线.zip")
@@ -119,6 +121,17 @@ JP_DMYO = os.path.join(JAPAN_DIR, "藩_dmyo_面.ZIP")
 JP_PTS = os.path.join(JAPAN_DIR, "藩治点.ZIP")
 BASIN6 = os.path.join(BASINS_DIR, "亚洲流域_6级.zip")
 BASIN7 = os.path.join(BASINS_DIR, "亚洲流域_7级.zip")
+
+
+def hydro_rivers(zh_name: str) -> str:
+    """HydroRIVERS v1.0 分区片（HydroSHEDS）的本地路径：HydroRIVERS_<分区>.zip。
+
+    与 HydroBASINS 同一家（`原始数据/流域/`）。分区是 HydroSHEDS 自己划的，**不是我们选的**：
+    亚洲片只覆盖 57.6°E–150.5°E，所以本管线（25°E–236°E）要拼 亚洲/西伯利亚/欧洲/澳洲 四片。
+    缺哪片只影响那片有没有 HydroRIVERS 的河——Natural Earth 那一层仍在兜底。
+    分区名与字节数见 tools/fetch_map_data.py 的 HYDRO_RIVERS。
+    """
+    return os.path.join(HYDRO_RIVERS_DIR, f"HydroRIVERS_{zh_name}.zip")
 
 
 def missing() -> list:

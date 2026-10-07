@@ -130,12 +130,20 @@ def _col_index(lon_s: np.ndarray, strip: _KoppenStrip) -> np.ndarray:
 
 
 def koppen_from_zip(W, H, cell, lon0, lat1, zip_path, member=KOPPEN_MEMBER,
-                    cache_path=None, rs=8, cs=8, log=print) -> np.ndarray:
+                    cache_path=None, rs=8, cs=8, log=print, reuse_cache=False) -> np.ndarray:
     """→ (H, W) uint8：每格**主导**柯本类（0 = 窗口内无有效像元）。
 
     主导 = 格内 rs × cs 个样本里出现最多的那一类（同 `terrain._dominant_from_parts` 的口径）。
     1 km 数据在 0.0625° 格里有约 7.5 × 7.5 = 56 个像元，rs = cs = 8 已略过采样，够用。
     """
+    if reuse_cache and cache_path and cache_ok(cache_path):
+        try:
+            a = np.load(cache_path)
+            if a.shape == (H, W):
+                log(f"  气候层读缓存 {os.path.basename(cache_path)}")
+                return a.astype(np.uint8)
+        except Exception:                                                     # noqa: BLE001
+            pass
     if not os.path.exists(zip_path):
         log(f"  ! 缺 {os.path.basename(zip_path)}，气候层跳过")
         return np.zeros((H, W), np.uint8)

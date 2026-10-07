@@ -62,3 +62,26 @@ def wrap_union(g, lon0: float = 25.0, lon1: float = 236.0):
         return parts[0]
     u = unary_union(parts)
     return None if u.is_empty else u
+
+
+def supercover(a, b):
+    """两个格坐标之间按 ≤1 格步长走 supercover，返回格子列表（含两端，**保证 4 邻接连通**）。
+
+    相邻两点之间线性采样，遇到"横纵同时跨一格"的对角步就补一格正交格。这是**线状要素转
+    栅格**的公共底座：`build_raster.burn_lines`（Natural Earth 河）与 `rivers.burn_hydrorivers`
+    （HydroRIVERS 河）都靠它，否则缩小时会断流（原委见 `设计笔记03` §14.11）。
+    放在这里的理由：它既不属于"折回"也不属于"烧面"，是二者的下游公用件。
+    """
+    import numpy as np
+    cells = []
+    dr, dc = b[0] - a[0], b[1] - a[1]
+    n = int(np.ceil(max(abs(dr), abs(dc)))) + 1
+    py = px = None
+    for i in range(n + 1):
+        t = i / n
+        cy, cx = int(np.floor(a[0] + dr * t)), int(np.floor(a[1] + dc * t))
+        cells.append((cy, cx))
+        if px is not None and abs(cy - py) == 1 and abs(cx - px) == 1:
+            cells.append((py, cx))              # 对角步补一格 → 4 邻接
+        py, px = cy, cx
+    return cells

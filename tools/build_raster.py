@@ -25,7 +25,7 @@
   地形编码.png   8 位灰度，值 = 16 类地形编码（见 tools/terrain.py 的 LEGEND）
   参考顶点.bin   **矢量顶点**（现代单元边界 + 唐 741 州面）—— 参考层不再是栅格掩膜
   台账.json      网格几何 / 地形图例 / 陆地口径 / 沙漠判据 / 地块台账
-  高程_降采样.npy 起伏_降采样.npy 植被_降采样.npy 气候_降采样.npy   中间层（改分类规则时不必重读原图）
+  高程/起伏/植被/气候/水体_降采样.npy   中间层（改分类规则时不必重读原图）
 
 **海洋口径只有一处**：陆地 = Natural Earth 10m 陆地 ∪ 湖泊 ∪ 冰川区（格心命中）。
 地形层的「海洋」是该掩膜的补集，地块层也被它裁掉 —— 于是「地块不可能落在海洋上」
@@ -52,13 +52,14 @@ from PIL import Image, ImageDraw
 from shapely.geometry import MultiPolygon, Polygon, shape
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from geo_wrap import wrap_into                     # noqa: E402
+from geo_wrap import wrap_into, supercover                          # noqa: E402
 from mapdata import (ROOT, under, UNITS as UNITS_JSON, RASTER, NE_DIR,      # noqa: E402
                      NE_LAND, NE_LAKES, NE_RIVERS, NE_REGIONS, NE_GLACIATED,
                      ETOPO_TIF, LC100_TIF, LC100_RAW, HARTWELL_ZIP, URL_PREFIX,
-                     KOPPEN_ZIP)
+                     KOPPEN_ZIP, hydro_rivers)
 import terrain as TR                                                    # noqa: E402
 import climate as CL                                                    # noqa: E402
+import rivers as RV                                                     # noqa: E402
 from refvec import build_ref_vector                                     # noqa: E402
 from basetag import base_tag as make_base_tag                           # noqa: E402
 from basetag import name_tag as _bt_name_tag, legend_tag as _bt_legend_tag   # noqa: E402
@@ -72,7 +73,13 @@ OUT = RASTER
 F_PLOT, F_DIST, F_TERRAIN, F_REFV, F_META = (
     "地块编码.png", "分区编码.png", "地形编码.png", "参考顶点.bin", "台账.json")
 F_ELEV, F_RELIEF, F_VEG = "高程_降采样.npy", "起伏_降采样.npy", "植被_降采样.npy"
+# 沙漠的海拔上限。柯本把羌塘/阿里（4700–5300 m）也判成干旱，于是青藏整片成了沙漠。
+# 实测：戈壁 p99 2131/max 3024、柴达木 p50 2938、羌塘 p50 4740 —— 线画在 3500 m。
+DESERT_MAX_ELEV = 3500.0
+# 河段短于这么多格就不画：低于 6.9 km 栅格的分辨能力，画出来是散点（见 cleanup_river_specks）。
+RIVER_MIN_CELLS = 4
 F_CLIMATE = "气候_降采样.npy"
+F_WATER = "水体_降采样.npy"
 
 LON0, LON1 = 25.0, 236.0
 LAT0, LAT1 = -56.0, 82.0
@@ -127,25 +134,6 @@ def encode_id(a: np.ndarray) -> np.ndarray:
     rgb[..., 1] = (a >> 8) & 0xFF
     return rgb
 
-
-def supercover(a, b):
-    """两点之间按 ≤1 格步长走 supercover，返回格子列表（含两端，保证 4 邻接连通）。
-
-    与 `burn_lines` 里的 walk 同一套补格规则：遇到"横纵同时跨一格"的对角步就补一格正交格。
-    单独抽出来是因为河流封缝也要用（见 seal_river_gaps）。
-    """
-    cells = []
-    dr, dc = b[0] - a[0], b[1] - a[1]
-    n = int(np.ceil(max(abs(dr), abs(dc)))) + 1
-    py = px = None
-    for i in range(n + 1):
-        t = i / n
-        cy, cx = int(np.floor(a[0] + dr * t)), int(np.floor(a[1] + dc * t))
-        cells.append((cy, cx))
-        if px is not None and abs(cy - py) == 1 and abs(cx - px) == 1:
-            cells.append((py, cx))          # 对角步补一格 → 4 邻接
-        py, px = cy, cx
-    return cells
 
 
 def seal_river_gaps(terrain: np.ndarray, value: int, water, log=print) -> int:
@@ -242,6 +230,34 @@ def seal_river_gaps(terrain: np.ndarray, value: int, water, log=print) -> int:
     return sealed
 
 
+def cleanup_river_specks(terrain, before, value: int, min_cells: int, log=print) -> int:
+    """丢掉短于 min_cells 的河段（还原成**烧伤之前**的地形类），返回丢了几格。
+
+    为什么需要：线网是从**分区文件**拼起来的（HydroRIVERS 只下了 as/si/eu/au 四片），
+    一条河的链条可能上游落在没下到的那片里，于是只剩孤零零一格插在海岛或海岸上。
+    实测这一版有 7,340 个「孤立单格河」，海拔中位 **10 m**、48% 的邻格是海洋 ——
+    全是北冰洋小岛与河口处的碎片。一格 6.9 km，画出来就是地图上的蓝色噪点。
+
+    判据只看**连通段大小**（短于栅格分辨能力的不画），不看位置，不挑肥拣瘦。
+    `before` 是河烧伤之前的 terrain 快照，丢掉的位置直接还原回去。
+    """
+    from scipy import ndimage
+    st4 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
+    riv = terrain == value
+    lab, n = ndimage.label(riv, structure=st4)
+    if not n:
+        return 0
+    sizes = np.bincount(lab.ravel())
+    tiny = np.where((sizes > 0) & (sizes < min_cells))[0]
+    drop = np.isin(lab, tiny)
+    k = int(drop.sum())
+    if k:
+        terrain[drop] = before[drop]
+    log(f"  河段去散点：{n:,} 段里丢掉 {int(tiny.size):,} 段"
+        f"（< {min_cells} 格 = 低于栅格分辨能力）→ 还原 {k:,} 格")
+    return k
+
+
 def name_tag(seeds) -> str:
     """保留这个名字做兼容（旧调用点），实现已挪到 tools/basetag.py 与 import_editor 共用。"""
     return _bt_name_tag([s["n"] for s in seeds])
@@ -297,6 +313,12 @@ def main() -> int:
     ap.add_argument("--no-veg", action="store_true", help="不读 Copernicus 土地覆盖")
     ap.add_argument("--raw-lc100", action="store_true",
                     help="若裸数组存在且自检通过则用它（那份残件已删，一般用不上）")
+    ap.add_argument("--river-min", type=float, default=RV.MIN_CMS, metavar="CMS",
+                    help=f"画哪些河：HydroRIVERS 的多年平均流量 ≥ 此值（m³/s，默认 "
+                         f"{RV.MIN_CMS:g}）。**河网密度就调这一个旋钮**："
+                         f"100 → 全图约 12.9 万格（1.7%%，1.8 倍于上一版）；"
+                         f"50 → 15.3 万；20 → 20.5 万（太密，实测像网）；"
+                         f"200 → 更疏。见 tools/rivers.py")
     args = ap.parse_args()
 
     if not os.path.exists(UNITS):
@@ -378,17 +400,20 @@ def main() -> int:
             print(f"  ! 未找到 {ETOPO}；地形退化到「只有海陆两档」", file=sys.stderr)
             elev = np.where(land, 50.0, -1.0).astype(np.float32)
             relief = np.zeros((H, W), np.float32)
-        veg = None
+        veg = water = None
         if not args.no_veg:
-            veg = TR.veg_from_landcover(
+            veg, water = TR.veg_from_landcover(
                 W, H, cell, LON0, LON1, LAT0, LAT1,
-                LC100_RAW, LC100_TIF, os.path.join(OUT, F_VEG), use_raw=args.raw_lc100)
+                LC100_RAW, LC100_TIF, os.path.join(OUT, F_VEG), use_raw=args.raw_lc100,
+                water_path=os.path.join(OUT, F_WATER))
             if veg is not None:
                 share = float((veg != TR.VEG_UNKNOWN).mean())
                 show = tuple(TR.FAM_AFFINITY) + (T_GRASS, T_BARE, T_PLAIN)
                 print(f"  植被层覆盖 {share * 100:.1f}% 像元（" +
                       "，".join(f"{TR.FAM_NAMES.get(t) or TR.LEGEND[t]} {int((veg == t).sum())}"
                                 for t in show) + "）")
+                print(f"  水体占比层：≥{TR.WATER_PCT}% 的格 {int((water >= TR.WATER_PCT).sum()):,}"
+                      f"（含海洋与湖泊；不是既有水面的碎水见下面「碎水补面」那行）")
         terrain = TR.classify(elev, relief, veg, land, LAT)   # lat 用于林型的权重制
 
         # 柯本气候类（沙漠/干旱的判据来源）。读它只为了一件事：**取代表时代替手绘面**。
@@ -397,7 +422,8 @@ def main() -> int:
         klim = None
         if not args.no_veg:
             klim = CL.koppen_from_zip(W, H, cell, LON0, LAT1, KOPPEN_ZIP,
-                                      cache_path=os.path.join(OUT, F_CLIMATE))
+                                      cache_path=os.path.join(OUT, F_CLIMATE),
+                                      reuse_cache=True)
             if klim is not None:
                 arid = np.isin(klim, CL.ARID)
                 print(f"  气候层：{CL.summarise(klim, 6)}")
@@ -472,7 +498,9 @@ def main() -> int:
                         for (ax, ay), (bx, by) in zip(co, co[1:]):
                             walk((ax - LON0) / cell, (LAT1 - ay) / cell,
                                  (bx - LON0) / cell, (LAT1 - by) / cell)
-            mask &= land.astype(bool)                 # 掩膜只在陆地上生效（land 是 uint8）
+            # **不裁陆地掩膜**：河口（长江江阴以下）在 NE 陆地面与 LC100 里都被判成海，
+            # 一裁就把入海段抹掉。河线的两端本来就在海岸/河口，不需要这层保护；
+            # 真正该防的是"整段跑到外海"，那条由 T_RIVER 与海洋收口的配合兜（见下面 ocean 收口）。
             terrain[mask] = value
             print(f"  {label}：{nline} 条折线 → {int(mask.sum())} 格")
 
@@ -497,9 +525,16 @@ def main() -> int:
         # 详见 tools/climate.py 与 `设计笔记03` §14.11。
         REG = ne_features(NE_REGIONS)
         if klim is not None:
-            dry = np.isin(klim, CL.ARID) & (veg == T_BARE) & land.astype(bool)
+            # **海拔上限**：沙漠不吃高山。柯本把羌塘/阿里（4700–5300 m）也判成 BWk/BSk，
+            # 于是整片青藏高原成了沙漠——需求方看图报的正是这个。实测各沙漠区的海拔：
+            # 戈壁 p99 2131 / max 3024，塔里木盆底 ~1200，撒哈拉 319，阿拉伯 519，伊朗 1125；
+            # 羌塘 p50 4740。中间 3200–4300 m 是空的，所以这条线画在 3500 m：
+            # 戈壁/柴达木（p50 2938）留得住，羌塘/昆仑（3600+）留给「高原/山地」。
+            dry = (np.isin(klim, CL.ARID) & (veg == T_BARE) & land.astype(bool)
+                   & (elev < DESERT_MAX_ELEV))
             terrain[dry] = T_DESERT
-            print(f"  沙漠（LC100 裸地 ∧ 柯本干旱气候）：{int(dry.sum()):,} 格")
+            print(f"  沙漠（LC100 裸地 ∧ 柯本干旱气候 ∧ 海拔 < {DESERT_MAX_ELEV:.0f} m）："
+                  f"{int(dry.sum()):,} 格")
         elif veg is not None:
             burn(REG, T_DESERT, "沙漠（退路：NE 沙漠面内 LC100 裸地 → 沙漠）",
                  filt=lambda r: r.get("FEATURECLA") == "Desert", only_veg=(T_BARE,))
@@ -511,10 +546,58 @@ def main() -> int:
                  only_veg=(T_BARE, T_GRASS, T_TUNDRA))
         burn(ne_features(NE_GLACIATED), T_ICE, "冰川")
         burn(ne_features(NE_LAKES), T_LAKE, "湖泊")
-        # 河用"按折线点燃"而不是 burn：折线要**保证 4 邻接连通**，否则缩小时断流（见 burn_lines）
-        burn_lines(ne_features(NE_RIVERS), T_RIVER, "河流")
+        was_lake = terrain == T_LAKE
+        # 河流：**HydroRIVERS（主）+ Natural Earth（兜）取并集**。
+        # 为什么换：NE 的河流层全库 1,473 个要素，长江入海段（江阴→崇明，约 230 km）
+        # 一条线都没有（最近的 NE 河线离江阴 81 km）——需求方看到的"还是断的"就是这处。
+        # 那是**覆盖度**问题，缩小像元救不了：空的地方再细也是空的。
+        # HydroRIVERS 光亚洲片就 1,428,959 条河段，上下游共用节点，天然接得上。
+        # NE 留着兜非洲/阿拉伯/美洲（本管线只下了四片 HydroRIVERS，见 rivers.REGIONS）。
+        before_rivers = terrain.copy()          # 去散点时还原用（16 类，7.4 MB，便宜）
+        hr_files = [hydro_rivers(z) for z in RV.REGIONS]
+        if any(os.path.exists(p) for p in hr_files):
+            RV.burn_hydrorivers(terrain, T_RIVER, cell, LON0, LAT1, hr_files,
+                                min_cms=args.river_min, log=print)
+        else:
+            print(f"  ! 没有 HydroRIVERS（{RV.REGIONS}），河流退回只有 NE 那一层", file=sys.stderr)
+        # NE 用"按折线点燃"而不是 burn：折线要**保证 4 邻接连通**，否则缩小时断流（见 burn_lines）
+        burn_lines(ne_features(NE_RIVERS), T_RIVER, "NE 河流（兜底并集）")
+        # 碎水补面：**逐格取众数会把"碎成几块的水"藏起来**。实测长江口有格 45% 是水像素
+        # （80/200 各占一部分），可单一类最多的是农田（LC100 40），取众数就记成「平原」——
+        # 于是河到 119.6°E 就"断"了，之后 230 km 的入海段整片是陆地色。
+        # 修法：水体占比 ≥ WATER_PCT 且**与既有水面 4 邻接**的格补成水面（河流）。
+        # 加"邻接"是为了不动海岸线：孤立的 30% 水格（滩涂、灌溉水田）不该变成河。
+        # 做法是"只灌与既有水相连的那一部分"——先按候选 ∪ 既有水做 4 邻接连通块，
+        # 丢掉不含既有水的块，再把剩下的候选格点亮。
+        if water is not None:
+            from scipy import ndimage
+            is_water = np.isin(terrain, (T_OCEAN, T_LAKE, T_RIVER))
+            cand = (water >= TR.WATER_PCT) & ~is_water
+            if cand.any():
+                seed = is_water | cand                       # 一起连通，才知道谁挨着水
+                lab = ndimage.label(seed, structure=np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))[0]
+                keep = np.unique(lab[is_water & (lab > 0)])  # 含既有水的块的编号
+                fill = cand & np.isin(lab, keep)
+                terrain[fill] = T_RIVER
+                print(f"  碎水补面：占比 ≥{TR.WATER_PCT}% 的格 {int(cand.sum()):,}，"
+                      f"其中与水面相连的 {int(fill.sum()):,} 补成河流"
+                      f"（河口/三角洲/辫状河；不相连的是滩涂水田，不动）")
         seal_river_gaps(terrain, T_RIVER, (T_OCEAN, T_LAKE), log=print)
-    terrain[land == 0] = T_OCEAN                  # 海洋口径收口
+        # **湖面赢**：河网里有"湖心线"（HydROSHEDS/NE 都把水流路径画过湖），那是流向记录
+        # 不是地表河。让它盖掉湖面，贝加尔湖心就成了一条河（check_terrain 抓到了）。
+        # 河穿湖本来就是河→湖→河，颜色一变不是"断"。
+        if was_lake.any():
+            back = int((was_lake & (terrain != T_LAKE)).sum())
+            terrain[was_lake] = T_LAKE
+            if back:
+                print(f"  湖面优先：把被河线盖掉的 {back:,} 格湖面还回来")
+        # 去散点放在**湖面还原之后**：还原会把河段切碎，先清会留下新的小段（实测 880 个孤点）。
+        cleanup_river_specks(terrain, before_rivers, T_RIVER, RIVER_MIN_CELLS, log=print)
+    # 海洋口径收口：陆地掩膜的补集。**但河线穿过的格子不算海** —— 长江江阴以下的入海段
+    # 在 NE 陆地面与 LC100 里都是 200（开阔海），若一律按掩膜收口，刚补上的入海段会被
+    # 重新抹成海洋，等于白换数据源。判据只看 `terrain == T_RIVER`（只有河烧伤它），
+    # 所以不会把任何真海格变成陆地。见 tools/rivers.py。
+    terrain[(land == 0) & (terrain != T_RIVER)] = T_OCEAN
     # 内海 / 大湖：里海、贝加尔、死海、五大湖在 Natural Earth 里属于"海洋层"（不在湖泊层），
     # 光靠 NE 会把它们记成「海洋」。LC100 自己分得很干净 —— 内陆水体是 80、开阔海是 200
     # （实测：里海/贝加尔/鄱阳/青海湖/死海/五大湖 = 80；渤海/黄海/南海/地中海/红海/日本海 = 200），
@@ -550,6 +633,10 @@ def main() -> int:
                      "地形层的「海洋」是该掩膜的补集，地块层也被它裁过",
         "desert_rule": "沙漠 = LC100 判「裸地」 ∧ 柯本干旱气候(BWh/BWk/BSh/BSk)；"
                        "Natural Earth 的手绘沙漠面不再参与（2026-10-08 改，见 设计笔记03 §14.11）",
+        "river_rule": "河流 = HydroRIVERS v1.0（流量 ≥ 20 m³/s）∪ Natural Earth 河线，按 supercover "
+                      "逐格点燃（4 邻接连通）；再补「水体占比 ≥ 30% 且与水面相连」的碎水格"
+                      "（河口/三角洲，逐格众数会把它们藏成陆地）。河线穿过的格不算海洋",
+        "water_rule": TR.water_frac_note(),
         "climate": {"source": "Beck et al. 2023, Scientific Data 10:724（CC BY 4.0）",
                     "member": CL.KOPPEN_MEMBER,
                     "grid": "1 km（0.00833333°），现值期 1991–2020",

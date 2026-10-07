@@ -8,6 +8,7 @@
     python tools/fetch_map_data.py --group basins        # 下载流域底（边地地块划分用）
     python tools/fetch_map_data.py --group foreign       # 下载外国县一级（53 国，约 15 MB）
     python tools/fetch_map_data.py --group climate       # 下载柯本气候分类（130 MB，沙漠判据）
+    python tools/fetch_map_data.py --group rivers        # 下载 HydroRIVERS 河网（254 MB，四片）
     python tools/fetch_map_data.py --group all
 
 全部落到 地图/地图数据/原始数据/。已存在且大小相符的文件跳过；不符则续传。
@@ -145,6 +146,27 @@ ITEMS += [("climate", "气候", "koppen_geiger_tif.zip",
            "https://figshare.com/ndownloader/files/61012822", 130618411,
            "柯本气候分类 1901–2099（Beck et al. 2023, CC BY 4.0）；现值期 1991–2020 的 1 km 那幅是干旱判据")]
 
+# ---- 河网：HydroRIVERS v1.0（HydroSHEDS）----
+# Natural Earth 的河流层全库只有 1,473 个要素，长江入海段（江阴→崇明，约 230 km）
+# **一条线都没有**——这是覆盖度问题，缩小像元救不了。HydroRIVERS 光亚洲片就有
+# 1,428,959 条河段，且上下游共用节点（天然接得上，没有"端点缝"）。见 tools/rivers.py。
+# HydroSHEDS 的分区是它自己划的、**不是我们选的**：亚洲片只覆盖 57.6°E–150.5°E，
+# 所以要拼 亚洲＋西伯利亚＋欧洲＋澳洲 四片，才盖住本管线窗口（25°E–236°E）的主要陆地。
+# 许可：免费含商用，**禁作独立产品再分发**（随产品分发可以）——与已有的 流域/ 同一笔账。
+# 另有一片 `ar`（北极，22 MB）**故意不列**：它只覆盖加拿大北极群岛，那里的河流量全在
+# 默认阈值 100 m³/s 之下，实测"画 0 段"。若要把阈值降到 50 以下，按同样格式加回来：
+#   ("北极", "ar", 22048523, "...")  →  https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_ar_shp.zip
+HYDRO_RIVERS = [
+    ("亚洲", "as", 90510995, "东亚/南亚/东南亚/日本：长江、黄河、湄公河…（窗口内主力）"),
+    ("西伯利亚", "si", 47301335, "叶尼塞/勒拿/鄂毕（北荒、辽海、瀚海）"),
+    ("欧洲", "eu", 67648957, "含安纳托利亚/高加索（波斯西缘、河中北缘）"),
+    ("澳洲", "au", 48770754, "澳大利亚与太平洋岛屿（红洲、南洋东缘）"),
+]
+ITEMS += [(("rivers", "河流", f"HydroRIVERS_{zh}.zip",
+            f"https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_{code}_shp.zip", n,
+            f"HydroRIVERS v1.0 河网·{zh}（HydroSHEDS）—— {desc}"))
+          for zh, code, n, desc in HYDRO_RIVERS]
+
 
 # 需要浏览器请求头的源（host 后缀 → 头字典）。figshare 前面挂着 AWS WAF 的人机校验，
 # 裸 UA 一律 202 + 0 字节；实测带这一套就 200。
@@ -246,7 +268,8 @@ def download(item, retries: int = 3) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--group", default="core",
-                    choices=["core", "basins", "modern", "foreign", "climate", "all"])
+                    choices=["core", "basins", "modern", "foreign", "climate",
+                             "rivers", "all"])
     ap.add_argument("--list", action="store_true")
     args = ap.parse_args()
 
@@ -257,7 +280,7 @@ def main() -> int:
             print(f"{state(it):<10}{it[0]:<8}{human(want) if want else '?':<9}{sub}/{name}  — {desc}")
         return 0
 
-    want_groups = ({"core", "basins", "modern", "foreign", "climate"}
+    want_groups = ({"core", "basins", "modern", "foreign", "climate", "rivers"}
                    if args.group == "all" else {args.group})
     todo = [it for it in ITEMS if it[0] in want_groups]
     print(f"目标目录: {RAW}")
