@@ -303,6 +303,48 @@ def main() -> int:
                         hit += 1
             print(f"  {label}：命中 {hit} 个面")
 
+        def burn_lines(feats, value, label):
+            """把**折线**按格点燃（河这类线状要素用这个，不要用上面的 burn）。
+
+            为什么不能用 burn：`contains_xy` 只测**格心**，而 `buf=cell*0.55` 只有约一格宽，
+            于是河线在栅格里是一串"只靠对角相连"的单格。实测（修之前）：全图 64,900 个
+            河流格，按 **4 邻接碎成 6,834 段**，允许对角才 260 段——差 26 倍。屏幕上就是断流：
+            对角相邻的两格在缩小后会被点采样整个丢掉（`render.js` 的地形层是最近邻）。
+
+            这里改成沿折线走 **supercover**：相邻顶点之间按 ≤1 格的步长采样，
+            遇到"横纵同时跨一格"的对角步就补一格正交格。于是结果**保证 4 邻接连通**，
+            而宽度仍是 1 格——只把断口接上，不改河的粗细。
+            """
+            mask = np.zeros((H, W), dtype=bool)
+
+            def walk(x0, y0, x1, y1):
+                dx, dy = x1 - x0, y1 - y0
+                n = int(np.ceil(max(abs(dx), abs(dy)))) + 1
+                px = py = None
+                for i in range(n + 1):
+                    t = i / n
+                    cx, cy = int(np.floor(x0 + dx * t)), int(np.floor(y0 + dy * t))
+                    if 0 <= cx < W and 0 <= cy < H:
+                        mask[cy, cx] = True
+                        if px is not None and abs(cx - px) == 1 and abs(cy - py) == 1:
+                            mask[py, cx] = True        # 对角步补一格 → 4 邻接
+                    px, py = cx, cy
+
+            nline = 0
+            for g, rec in feats:
+                for gg in wraps(g):
+                    for part in getattr(gg, "geoms", [gg]):
+                        if part.geom_type != "LineString":
+                            continue
+                        co = list(part.coords)
+                        nline += 1
+                        for (ax, ay), (bx, by) in zip(co, co[1:]):
+                            walk((ax - LON0) / cell, (LAT1 - ay) / cell,
+                                 (bx - LON0) / cell, (LAT1 - by) / cell)
+            mask &= land.astype(bool)                 # 掩膜只在陆地上生效（land 是 uint8）
+            terrain[mask] = value
+            print(f"  {label}：{nline} 条折线 → {int(mask.sum())} 格")
+
         # Natural Earth 在这条管线里只干两件事：
         #   ① 水体与冰雪（湖泊/河流/冰川）——物理事实，土地覆盖产品分不了这么细；
         #   ② 沙漠/苔原的**细化**——且只允许覆盖"本来就没森林"的类（only_from），
@@ -323,7 +365,8 @@ def main() -> int:
              only_veg=(T_BARE, T_GRASS, T_TUNDRA))
         burn(ne_features(NE_GLACIATED), T_ICE, "冰川")
         burn(ne_features(NE_LAKES), T_LAKE, "湖泊")
-        burn(ne_features(NE_RIVERS), T_RIVER, "河流", buf=cell * 0.55)
+        # 河用"按折线点燃"而不是 burn：折线要**保证 4 邻接连通**，否则缩小时断流（见 burn_lines）
+        burn_lines(ne_features(NE_RIVERS), T_RIVER, "河流")
     terrain[land == 0] = T_OCEAN                  # 海洋口径收口
     # 内海 / 大湖：里海、贝加尔、死海、五大湖在 Natural Earth 里属于"海洋层"（不在湖泊层），
     # 光靠 NE 会把它们记成「海洋」。LC100 自己分得很干净 —— 内陆水体是 80、开阔海是 200
