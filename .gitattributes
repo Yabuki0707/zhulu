@@ -1,0 +1,16 @@
+# 换行一律按磁盘上的字节来，**不做任何转换**（`-text`）。
+#
+# 为什么不用 `* text=auto`：这个仓库文本/二进制混杂，而且工作区的 .md/.py/.js 里
+# CRLF 与 LF 本来就混着。`text=auto` 会把它们统一成 LF 存、CRLF 取出，
+# 一 clone 就整棵树被改写，全是假 diff。`-text` 零改动、可复现。
+#
+# 配套：两个仓库都设了 `core.autocrlf=false`（本机全局默认是 true，
+# 见 .gitattributes 的兄弟说明），免得机器一换行为就变。
+* -text
+
+# 二进制：不做 diff、不做合并、不做换行转换
+*.png binary
+*.bin binary
+*.tif binary
+*.zip binary
+*.npy binary
