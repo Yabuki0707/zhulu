@@ -29,6 +29,7 @@ from datetime import date
 
 import shapefile
 from geo_wrap import wrap_union
+from mapdata import SCOPE_LON0, SCOPE_LON1, SCOPE_LAT0, SCOPE_LAT1
 from mapdata import (ROOT, DATA_DIR, under, UNITS as UNITS_JSON,
                      NE_ADM1, NE_COUNTRIES, GADM_CN3)
 from pyproj import CRS, Geod, Transformer
@@ -90,8 +91,14 @@ ASIA = {"AE","AF","AM","AZ","BD","BH","BN","BT","CN","CY","GE","ID","IL","IN","I
         "QA","SA","SG","SY","TH","TJ","TL","TM","TR","TW","UZ","VN","YE","IO","CC","CX"}
 OCEANIA = {"AU","NZ","PG","FJ","SB","VU","NC","PF","WS","TO","KI","NR","TV","FM","MH","PW","GU",
            "MP","AS","CK","NU","TK","WF","NF","PN"}
+# GADM 的中华层里，港澳两地的 `NL_NAME_1/2` 是空的、`NAME_*` 是罗马字（Macau / Ilhas / NA），
+# 不补就会印出「Macau市区」。原来靠一张手写译名表 `CITY_ZH` 兜，那张表在"地名全量中文化"
+# 那次重构里被删了。这里只留**实测需要的那三条**——小、稳定、一眼看得懂。
+ADMIN_ZH = {"Macau": "澳门", "Ilhas": "澳门离岛", "NA": "香港"}
 RU_ASIA_LON = 58.0       # 俄罗斯以此经度为界，只留乌拉尔以东（北荒/辽海）
-LON0, LON1 = 25.0, 236.0  # 连续经度窗口（亚洲+大洋洲；与 build_raster 一致）
+# 世界窗口与格边长：**唯一出处是 tools/mapdata.py**（build_raster 用的是同一份）。
+LON0, LON1 = SCOPE_LON0, SCOPE_LON1
+LAT0, LAT1 = SCOPE_LAT0, SCOPE_LAT1
 
 
 def keep_unit(iso: str, iso2: str, lon: float) -> bool:
@@ -168,11 +175,17 @@ def build_china(dp: int):
         g = g.simplify(CHINA_TOL, preserve_topology=True)
         if g.is_empty:
             continue
+        # 名称一律取 GADM 自带的**本地语言名**（`NL_NAME_*`），没有才退回罗马字名。
+        # 原先这里还过一层手写的 `CITY_ZH` 译名表——那张表在"地名全量中文化"那次重构里
+        # 已经删掉了，留下三处悬空引用（`--dump-units` 一跑就 NameError）。核实过：
+        # 现有 基础单元.json 里的「安庆市」这类名字本来就来自 NL_NAME_3，所以直接用即可。
         prov = nm(p, "NL_NAME_1") or p.get("NAME_1") or ""
         city = nm(p, "NL_NAME_2") or p.get("NAME_2") or ""
-        prov = CITY_ZH.get(prov, prov)
-        city = CITY_ZH.get(city, city)
-        name = nm(p, "NL_NAME_3") or CITY_ZH.get(nm(p, "NAME_3"), "")
+        prov = ADMIN_ZH.get(prov, prov)
+        city = ADMIN_ZH.get(city, city)
+        # 只认本地语言名；**不要**退回罗马字 `NAME_3`——那会让市辖区在中文地图上显示
+        # "Anqing" 这种英文名。没有本地名的走下面的「<市名>市区」兜底（实测 331 个）。
+        name = nm(p, "NL_NAME_3") or ""
         if not name:
             # GADM 的市辖区无中文名（NAME_3 为拼音）；用所属市名兜底，保证可辨识
             base = (city or prov or nm(p, "NL_NAME_1") or p.get("NAME_3") or "").replace("市", "")
@@ -250,6 +263,14 @@ def build_world(dp: int, country_zh: dict | None = None):
         # 绝不可逐点折回——那会把几何拉成横贯全图的带（本轮踩过的坑）
         gg = wrap_union(g, LON0, LON1)
         if gg is None:
+            dropped += 1
+            continue
+        # 窗口外的单元整块丢掉（不留"零像元地块"）。`wrap_union` 只在两条经缝上切，
+        # 管不了纬度，所以这里按包围盒再判一次。裁之前逐个核过：被丢的都是附录C 范围外
+        # 的孤岛（皮特凯恩、5 个南极圈外无人岛），且**没有任何保留单元横跨窗口边**
+        # ——否则会被切掉一角而不是整块丢。见 tools/mapdata.py 的 SCOPE_* 注释。
+        bx = gg.bounds
+        if bx[2] < LON0 or bx[0] > LON1 or bx[3] < LAT0 or bx[1] > LAT1:
             dropped += 1
             continue
         g = gg.simplify(WORLD_TOL, preserve_topology=True)

@@ -4,7 +4,7 @@
 
 栅格是全图唯一几何真源，**一一映射**：每个像元恰好一条记录（地块编码 + 块区编码 + 地形）。
 
-    python tools/build_raster.py                     # 默认 cell 0.0625°（1/16°）→ 3376 × 2208
+    python tools/build_raster.py                     # 默认 cell 1/19° → 3819 × 2470（窗口见 mapdata.SCOPE_*）
     python tools/build_raster.py --no-veg            # 不读土地覆盖（地形只按高程+掩膜）
     python tools/build_raster.py --raw-lc100         # 裸数组自检通过时用它（否则自动走 TIFF）
     python tools/build_raster.py --no-terrain        # 只出地块层（不等高程）
@@ -56,7 +56,8 @@ from geo_wrap import wrap_into, supercover                          # noqa: E402
 from mapdata import (ROOT, under, UNITS as UNITS_JSON, RASTER, NE_DIR,      # noqa: E402
                      NE_LAND, NE_LAKES, NE_RIVERS, NE_REGIONS, NE_GLACIATED,
                      ETOPO_TIF, LC100_TIF, LC100_RAW, HARTWELL_ZIP, URL_PREFIX,
-                     KOPPEN_ZIP, hydro_rivers)
+                     KOPPEN_ZIP, hydro_rivers, CELL as CELL0,
+                     SCOPE_LON0, SCOPE_LON1, SCOPE_LAT0, SCOPE_LAT1)
 import terrain as TR                                                    # noqa: E402
 import climate as CL                                                    # noqa: E402
 import rivers as RV                                                     # noqa: E402
@@ -81,8 +82,9 @@ RIVER_MIN_CELLS = 4
 F_CLIMATE = "气候_降采样.npy"
 F_WATER = "水体_降采样.npy"
 
-LON0, LON1 = 25.0, 236.0
-LAT0, LAT1 = -56.0, 82.0
+# 世界窗口与格边长的唯一出处（编辑器筛单元用的是同一份，见 tools/mapdata.py）
+LON0, LON1 = SCOPE_LON0, SCOPE_LON1
+LAT0, LAT1 = SCOPE_LAT0, SCOPE_LAT1
 
 TERRAIN_LEGEND = TR.LEGEND
 (T_OCEAN, T_LAKE, T_RIVER, T_ICE, T_DESERT, T_BARE, T_PLATEAU, T_MOUNTAIN, T_HILL, T_PLAIN,
@@ -211,6 +213,40 @@ def seal_river_gaps(terrain: np.ndarray, value: int, water, log=print) -> int:
             aj = dj[0] * -vy + dj[1] * -vx if dj else 0.0              # j 是否朝着 i
             if d <= 2.05 or ai >= 0.5 or aj >= 0.5:
                 pairs.append((d, (int(ri), int(ci)), (int(rj), int(cj))))
+    # **端点 → 任意河格（T 型汇口）**：上一版只在"端点↔端点"之间接，管不了"支流端点指向
+    # 干流腰部"这种最常见的汇口。实测漏出来的缝全属于这一类（如南京段长江 118.63E/32.11N，
+    # 两条折线只差 1.41 格、还都是端点，但一条是另一条的"腰"）。做法：沿端点朝外的方向
+    # 找一个锥形扇面（±50°）内最近的**别的段**的河格，≤3.5 格就接。
+    import math
+    erc2 = {}
+    for i in range(len(ends)):
+        ri, ci = int(ends[i][0]), int(ends[i][1])
+        di = out_dir(ri, ci)
+        if di is None:
+            continue
+        best = None
+        R = 4
+        for dy in range(-R, R + 1):
+            for dx in range(-R, R + 1):
+                if dy == 0 and dx == 0:
+                    continue
+                rj, cj = ri + dy, ci + dx
+                if not (0 <= rj < H and 0 <= cj < W):
+                    continue
+                if not riv[rj, cj] or lab[rj, cj] == lab[ri, ci]:
+                    continue
+                d = math.hypot(dy, dx)
+                if d > 3.6:
+                    continue
+                cos = (di[0] * dy + di[1] * dx) / d          # 是否朝着它
+                if cos < 0.5:
+                    continue
+                if best is None or d < best[0]:
+                    best = (d, (rj, cj))
+        if best is not None:
+            erc2[(ri, ci)] = best
+    for a, (d, b) in erc2.items():
+        pairs.append((d, a, b))
     pairs.sort(key=lambda t: t[0])
 
     used, sealed = set(), 0
@@ -220,7 +256,10 @@ def seal_river_gaps(terrain: np.ndarray, value: int, water, log=print) -> int:
         used.add(a)
         used.add(b)
         cells = [(y, x) for y, x in supercover(a, b) if 0 <= y < H and 0 <= x < W]
-        if any(terrain[y, x] in water for y, x in cells):
+        # 跨水面的桥：**只禁长的**。河中间夹 1 格小湖、河口那 1 格，本来就是河自己
+        # （不接就是地图上一个亮点，实测需求方看到的就是这个）；而贝加尔那种长水面，
+        # 河本来就该在湖岸断掉（进湖—出湖）。所以只允许桥经过 ≤2 格水面。
+        if sum(1 for y, x in cells if terrain[y, x] in water) > 2:
             continue
         for y, x in cells:
             terrain[y, x] = value
@@ -255,6 +294,47 @@ def cleanup_river_specks(terrain, before, value: int, min_cells: int, log=print)
         terrain[drop] = before[drop]
     log(f"  河段去散点：{n:,} 段里丢掉 {int(tiny.size):,} 段"
         f"（< {min_cells} 格 = 低于栅格分辨能力）→ 还原 {k:,} 格")
+    return k
+
+
+def connect_diagonal_rivers(terrain, value: int, log=print) -> int:
+    """把"两个**不同的**河段只靠一个角相连"补成正交相连，返回补了几格。
+
+    为什么还要这一步：`supercover` 保证的是**同一条折线内部** 4 邻接连通；`seal_river_gaps`
+    管的是"两个断头离得近"。两者都管不了**段与段之间恰好只用对角相接**——两格共享一个角，
+    看着相连、缩小时会散架（地图的规矩是 4 邻接）。实测残留的 17 处全属这一类
+    （南京段长江 118.63E/32.11N 就是一处）。
+
+    ⚠️ 只补**跨段**的对角：同一段内部本来就是楼梯状 4 邻接，那些角接触无害；
+    一律补会把河"加粗"（实测那样会多补 5.4 万格、河格从 1.45% 涨到 2.06%）。
+    """
+    from scipy import ndimage
+    H, W = terrain.shape
+    riv = terrain == value
+    st4 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
+    lab = ndimage.label(riv, structure=st4)[0]
+    water = np.isin(terrain, (T_OCEAN, T_LAKE, T_RIVER))
+    add = np.zeros((H, W), dtype=bool)
+    for dy, dx in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        r0, r1 = max(0, -dy), min(H, H - dy)
+        c0, c1 = max(0, -dx), min(W, W - dx)
+        a = riv[r0:r1, c0:c1]
+        b = riv[r0 + dy:r1 + dy, c0 + dx:c1 + dx]
+        la = lab[r0:r1, c0:c1]
+        lb = lab[r0 + dy:r1 + dy, c0 + dx:c1 + dx]
+        cross = a & b & (la != lb) & (la > 0) & (lb > 0)
+        if not cross.any():
+            continue
+        v1 = terrain[r0 + dy:r1 + dy, c0:c1]              # 纵向桥格
+        v2 = terrain[r0:r1, c0 + dx:c1 + dx]              # 横向桥格
+        use1 = cross & ~water[r0 + dy:r1 + dy, c0:c1]     # 纵向桥是陆地 → 点它
+        add[r0 + dy:r1 + dy, c0:c1] |= use1
+        use2 = cross & ~use1 & ~water[r0:r1, c0 + dx:c1 + dx]
+        add[r0:r1, c0 + dx:c1 + dx] |= use2
+    k = int(add.sum())
+    if k:
+        terrain[add] = value
+    log(f"  对角补格：跨段「只靠角相连」的河补成正交 {k:,} 格")
     return k
 
 
@@ -307,8 +387,9 @@ def tang_rings(cell: float):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cell", type=float, default=0.0625,
-                    help="像元边长（度）；0.0625° = 1/16° ≈ 6.9 km（0.075° ≈ 8.3 km，粗一档）")
+    ap.add_argument("--cell", type=float, default=CELL0,
+                    help=f"像元边长（度）；默认 1/19° ≈ 5.86 km（0.075° ≈ 8.3 km 粗一档，"
+                         f"1/16° = 0.0625° ≈ 6.9 km 是 2026-10-08 之前的旧值）")
     ap.add_argument("--no-terrain", action="store_true")
     ap.add_argument("--no-veg", action="store_true", help="不读 Copernicus 土地覆盖")
     ap.add_argument("--raw-lc100", action="store_true",
@@ -357,6 +438,11 @@ def main() -> int:
     k, units, seeds = d["k"], d["units"], d["seeds"]
     print(f"单元 {len(units)}，种子地块 {len(seeds)}")
     plot_id = np.zeros((H, W), dtype=np.uint16)
+    # 块区层（**底稿**）与地块层在**同一个循环**里写：一个单元的像元，地块编码与块区编码
+    # 来自同一次 `contains_xy`，天然满足"块区必须落在它声明的地块内"这条硬约束
+    # （import_editor 会校验），也省掉第二遍栅格化。这里先写**单元下标**做临时编号，
+    # 循环结束后按"有像元的单元"重排成连续的块区编号。
+    tmp_dist = np.zeros((H, W), dtype=np.uint16)
     order = sorted(range(len(units)), key=lambda i: -units[i]["a"])   # 大面先画，小面压上
     for n, i in enumerate(order, 1):
         g = unit_polys(units[i], k)
@@ -367,12 +453,14 @@ def main() -> int:
         from shapely import contains_xy
         m = contains_xy(g, xs, ys).reshape(r1 - r0, c1 - c0)
         plot_id[r0:r1, c0:c1][m] = units[i]["sp"] + 1
+        tmp_dist[r0:r1, c0:c1][m] = i + 1
         if n % 800 == 0:
             print(f"    {n}/{len(order)}")
     covered_raw = int((plot_id > 0).sum())
     # 裁掉压在海洋上的像元：单位面是按容差简化过的，沿海会甩出去几格（还有整片海域算进
     # 行政区的，如三沙那种"海上辖区"）。陆地掩膜是唯一口径，这里一次性对齐。
     plot_id[land == 0] = 0
+    tmp_dist[plot_id == 0] = 0
     covered = int((plot_id > 0).sum())
     print(f"  覆盖 {covered / plot_id.size * 100:.1f}% 像元（其余为无地块）"
           f"；裁掉压在海上的 {covered_raw - covered:,} 格"
@@ -381,8 +469,30 @@ def main() -> int:
     print(f"  零像元地块 {blank} 个（小单元落在格心之间 / 只剩海域；编辑器里会标「空」）")
     Image.fromarray(encode_id(plot_id), "RGB").save(os.path.join(OUT, F_PLOT), optimize=True)
 
-    # 块区层：初始为空（0 = 无块区），由编辑器在地块内绘制
-    dist_id = np.zeros((H, W), dtype=np.uint16)
+    # ---------------- 块区层（底稿） ----------------
+    # 块区 = **地块的下一级行政单元**（GLOSSARY："地块之下再分的一层"）。管线的产出只是
+    # **底稿**，定稿由人在编辑器里改（`docs/adr/0001`：行政图 = 地块层 + 块区层）。
+    #   · 中华：地块是按地级市归并出来的，所以它的下一级就是**县** —— 2421 个县 = 2421 个块区，
+    #     名字全中文（GADM 的 NL_NAME_3）。
+    #   · 世界：现在只到一级政区（一个一级政区就是一个地块），下一级还没有数据 → 先给
+    #     每个地块 1 个占满它的块区，保证"每个地块都有块区"。
+    #     ⚠️ 世界的**真**块区底稿要等 GADM L2 的中文名补齐（18,232 个单元，现在只有约一半
+    #     有中文名，灌进去会满屏罗马字）—— 数据已下，见 TODO。
+    # 编号：按单元下标顺序给"有像元的单元"发连续编号，这样台账读起来是稳定的。
+    present = np.unique(tmp_dist)
+    present = present[present > 0]
+    blk_lut = np.zeros(len(units) + 1, dtype=np.uint16)
+    districts = []
+    for n, ui in enumerate(present, 1):
+        blk_lut[int(ui)] = n
+        districts.append({"id": n, "name": units[int(ui) - 1]["n"],
+                          "plot": units[int(ui) - 1]["sp"] + 1})
+    dist_id = blk_lut[tmp_dist]
+    del tmp_dist
+    nogap = int(((plot_id > 0) & (dist_id == 0)).sum())
+    print(f"  块区底稿 {len(districts):,} 个（中华＝县；世界＝每地块 1 个占位）"
+          f"；有地块却没块区的像元 {nogap}（必须为 0）")
+    assert nogap == 0, "块区必须覆盖每一个有地块的像元"
     Image.fromarray(encode_id(dist_id), "RGB").save(os.path.join(OUT, F_DIST), optimize=True)
 
     # ---------------- 地形层（20 类） ----------------
@@ -582,7 +692,6 @@ def main() -> int:
                 print(f"  碎水补面：占比 ≥{TR.WATER_PCT}% 的格 {int(cand.sum()):,}，"
                       f"其中与水面相连的 {int(fill.sum()):,} 补成河流"
                       f"（河口/三角洲/辫状河；不相连的是滩涂水田，不动）")
-        seal_river_gaps(terrain, T_RIVER, (T_OCEAN, T_LAKE), log=print)
         # **湖面赢**：河网里有"湖心线"（HydROSHEDS/NE 都把水流路径画过湖），那是流向记录
         # 不是地表河。让它盖掉湖面，贝加尔湖心就成了一条河（check_terrain 抓到了）。
         # 河穿湖本来就是河→湖→河，颜色一变不是"断"。
@@ -591,6 +700,11 @@ def main() -> int:
             terrain[was_lake] = T_LAKE
             if back:
                 print(f"  湖面优先：把被河线盖掉的 {back:,} 格湖面还回来")
+        # 封缝放在**湖面还原之后**：还原会把河在湖岸处切成两段，再封才能把
+        # "河→1 格湖→河"这种查出来的断口接上（反过来做，桥刚封上就被还原成湖）。
+        seal_river_gaps(terrain, T_RIVER, (T_OCEAN, T_LAKE), log=print)
+        # 连对角放在封缝之后、去散点之前：先把角接触补成正交，合并后的段才不会被当作小段丢掉。
+        connect_diagonal_rivers(terrain, T_RIVER, log=print)
         # 去散点放在**湖面还原之后**：还原会把河段切碎，先清会留下新的小段（实测 880 个孤点）。
         cleanup_river_specks(terrain, before_rivers, T_RIVER, RIVER_MIN_CELLS, log=print)
     # 海洋口径收口：陆地掩膜的补集。**但河线穿过的格子不算海** —— 长江江阴以下的入海段
@@ -643,7 +757,10 @@ def main() -> int:
                     "arid": list(CL.ARID)},
         "ref_encoding": "参考顶点.bin：ZLRV1 魔数 + 环表 + 格坐标×8 的 uint16 顶点对",
         "base_tag": base_tag,
-        "districts": [],
+        "districts": districts,
+        "block_rule": "块区 = 地块的下一级行政单元（中华＝县；世界暂无二级，每地块 1 个占位）。"
+                      "与地块层在同一个 contains_xy 循环里写出，故块区必然落在其声明地块内；"
+                      "管线只出底稿，定稿在编辑器里改",
         "counts": {"units": len(units), "plots": len(seeds), "covered_cells": covered,
                    "covered_before_mask": covered_raw, "land_cells": int(land.sum())},
         "ref": ref_info,
@@ -680,7 +797,10 @@ def main() -> int:
         "grid": meta["grid"], "terrain_legend": TERRAIN_LEGEND,
         "plots": meta["plots"], "palette": pal,
         "domains": [{"g": g["geo"], "d": d} for g in pal for d in g["domains"]],
-        "districts": [],
+        "districts": districts,
+        "block_rule": "块区 = 地块的下一级行政单元（中华＝县；世界暂无二级，每地块 1 个占位）。"
+                      "与地块层在同一个 contains_xy 循环里写出，故块区必然落在其声明地块内；"
+                      "管线只出底稿，定稿在编辑器里改",
         "base_tag": base_tag,
         "land_rule": meta["land_rule"],
     }
