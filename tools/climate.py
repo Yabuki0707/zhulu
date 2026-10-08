@@ -62,6 +62,134 @@ STEPPE = (6, 7)                          # BSh BSk
 TUNDRA = (29,)                           # ET
 
 
+# ================================================================ 两轴：热量带 × 干湿
+# v1 这一层只是**构建期中间层**（判沙漠用的 .npy）；v2 升格为**产品层**
+# （`栅格/气候编码.png`），因为地形表把气候那一半交还给了它：沙漠、苔原、雨林/针叶/阔叶
+# 全不再存储，改由「覆盖 × 气候」派生（见 docs/adr/0006）。
+#
+# 为什么不直接存柯本 30 类：柯本是为**植被分类**设计的，符号玩家读不懂；游戏要吃的是
+# 两个量——**热量**（几熟、物产、疫病）与**干湿**（农耕/游牧、商路）。柯本可以拆成这两轴，
+# 但 **B 组必须按纬度补一刀**：B 组是按*水分*定义的，实测 BWh 有 **59.1% 在回归线以外**
+# （撒哈拉北缘、塔尔沙漠、阿拉伯北缘），一律算「热带干旱」就错了一半。
+# （BWk/BSk 冷沙漠 99.9% 在回归线外，本来就干净，照柯本的 k 归温带即可。）
+#
+# 两轴只要 5 位：热量带 2 位 + 干湿 3 位。**寒带不占热量带的取值**——它由干湿的 0 码表示。
+# 柯本 ET/EF 共 195,787 格（这些是真的极地）。
+# 读取规则：**先读干湿；=0 则整条气候码读作「寒带」，热量带那 2 位是 don't-care。**
+#
+# ⚠️ 0 这个码因此有两个来源：柯本的 ET/EF，以及"整格无气候数据"。后者**必须在管线里补掉**
+# （`fill_land_nodata`）——实测 11,352 格里阿拉斯加、波罗的海、堪察加都有，纬度最低到
+# 9.4°N；不补就会把阿拉斯加 58°N 读成极地。`build_raster` 的断言第 4 条守着这件事。
+HEAT_TROP, HEAT_SUBTROP, HEAT_TEMP, HEAT_SUBARC = range(4)
+HEAT_NAMES = ["热带", "亚热带", "温带", "亚寒带"]      # 寒带不在这里，见 MOIST_NAMES[0]
+MOIST_NAMES = ["寒带", "干旱", "半干旱", "冬干", "冬雨", "夏雨", "季风", "常湿"]
+N_HEAT, N_MOIST = len(HEAT_NAMES), len(MOIST_NAMES)
+SUBARCTIC_LAT = 23.5                     # B 组按此纬度切成「热」与「冷」两半
+
+_HEAT = {}
+for _c in (1, 2, 3, 4, 6):               # Af/Am/Aw ＋ BWh/BSh（热的 B 组）
+    _HEAT[_c] = HEAT_TROP
+for _c in range(8, 17):                  # Csa … Cfc
+    _HEAT[_c] = HEAT_SUBTROP
+for _c in (17, 18, 21, 22, 25, 26):      # Dsa/Dsb/Dwa/Dwb/Dfa/Dfb（温和的 D 组）
+    _HEAT[_c] = HEAT_TEMP
+for _c in (5, 7):                        # BWk/BSk（冷的 B 组）
+    _HEAT[_c] = HEAT_TEMP
+for _c in (19, 20, 23, 24, 27, 28):      # Dsc/Dsd/Dwc/Dwd/Dfc/Dfd（亚寒带）
+    _HEAT[_c] = HEAT_SUBARC
+
+_MOIST = {4: 1, 5: 1,                    # 干旱
+          6: 2, 7: 2,                    # 半干旱
+          1: 7, 2: 6, 3: 3}              # Af 常湿 / Am 季风 / Aw 冬干（稀树草原）
+for _c in (8, 9, 10, 17, 18, 19, 20):    # 带 s = 冬雨（地中海型）
+    _MOIST[_c] = 4
+for _c in (11, 12, 13, 21, 22, 23, 24):  # 带 w = 夏雨（季风型）
+    _MOIST[_c] = 5
+for _c in (14, 15, 16, 25, 26, 27, 28):  # 带 f = 常湿
+    _MOIST[_c] = 7
+for _c in (29, 30):                      # ET/EF → 干湿码 0，即「寒带」
+    _MOIST[_c] = 0
+
+HEAT_BY_CODE = np.zeros(N_CODE, np.uint8)
+MOIST_BY_CODE = np.zeros(N_CODE, np.uint8)
+for _c, _h in _HEAT.items():
+    HEAT_BY_CODE[_c] = _h
+for _c, _m in _MOIST.items():
+    MOIST_BY_CODE[_c] = _m
+
+
+def axes(klim: np.ndarray, lat: np.ndarray):
+    """柯本类栅格 → (heat, moist) 两张 uint8：每格 0..3 与 0..7。
+
+    · **B 组按纬度补一刀**：BWh/BSh 在回归线内算热带，线外算亚热带；BWk/BSk 照柯本的 k
+      归温带（99.9% 在回归线外）。
+    · **调用方必须先跑 `fill_land_nodata`**——否则"整格无气候数据"（0）会混进 `moist = 0`，
+      和柯本的 ET/EF 一起被读成「寒带」，把阿拉斯加 58°N 显示成极地。
+    """
+    heat = HEAT_BY_CODE[klim].copy()
+    moist = MOIST_BY_CODE[klim].copy()
+    hot = np.abs(lat) <= SUBARCTIC_LAT
+    bw_bs = np.isin(klim, (4, 6))                    # 只有"热的 B 组"要按纬度再分
+    heat = np.where(bw_bs & ~hot, np.uint8(HEAT_SUBTROP), heat)
+    return heat.astype(np.uint8), moist.astype(np.uint8)
+
+
+def pack(heat: np.ndarray, moist: np.ndarray) -> np.ndarray:
+    """两轴 → 一个字节：`码 = 热量带 × 8 + 干湿`（0..31）。写 8 位灰度 PNG 用这个。"""
+    return (heat.astype(np.uint16) * N_MOIST + moist.astype(np.uint16)).astype(np.uint8)
+
+
+def unpack(code: np.ndarray):
+    """一个字节 → (heat, moist)。读取方（编辑器 / 游戏）用这个。"""
+    code = code.astype(np.uint8)
+    return (code // N_MOIST).astype(np.uint8), (code % N_MOIST).astype(np.uint8)
+
+
+def fill_land_nodata(klim: np.ndarray, land: np.ndarray, log=print):
+    """把**陆地上**"整格无气候数据"的洞补上（取最近的有效气候类），返回 (新层, 补了几格)。
+
+    为什么必须补：柯本把**水体与冰盖** mask 成 nodata，于是"整格都在湖里/冰上"的格子判不出
+    气候类；而 NE 陆地掩膜说那是陆（小岛、湖岸、冰川前缘、三角洲）。实测 11,352 格——
+    它们**不在极地**：阿拉斯加一带 3,456 格（200°E 那个 5° 箱）、波罗的海 2,700 余格、
+    堪察加与白令海沿岸，纬度中位 69.9°、最低 9.4°N。
+
+    ⚠️ 这批格若不补，就会落进干湿码 0 —— 而 0 是「寒带」。**阿拉斯加 58°N 会被显示成极地**。
+    这正是 `build_raster.assert_contract` 第 4 条要拦的东西：它第一次跑就把这条**拦下来了**
+    （原先 `polar_nodata` 的注释里写着"实测全在 81.7–81.8°N"，那是只看纬度最高的 3 格
+    得出的错话——断言把这条错话证伪了）。
+
+    补法用最近邻而非邻域多数：洞都很小（湖心、岸边），最近的有效格就是它本该有的气候带。
+    """
+    from scipy import ndimage
+    k = klim.copy()
+    hole = np.asarray(land).astype(bool) & (k == 0)
+    n = int(hole.sum())
+    if not n:
+        return k, 0
+    # ⚠️ 源掩膜必须是 `k == 0`（无气候类的格：陆地洞 **加上海洋**），不能是 `~hole`。
+    # 用 `~hole` 会把"洞旁边那格海"当成有效源——海也是 klim==0，于是沿海的洞被填回 0，
+    # 补完还剩 6,814 格（第一次就是这么错的）。
+    src = (k == 0)
+    _d, idx = ndimage.distance_transform_edt(src, return_indices=True)
+    k[hole] = k[idx[0][hole], idx[1][hole]]
+    log(f"  气候补洞：陆地上 {n:,} 格无气候类（柯本把水体/冰盖 mask 成 nodata，"
+        f"而 NE 说那是陆）→ 取最近**有气候类**的格补上")
+    return k, n
+
+
+def polar_nodata(klim: np.ndarray, lat: np.ndarray, land: np.ndarray):
+    """→ (格数, 最小 |纬度|)：陆地 ∧ klim==0 的统计，给管线断言用。
+
+    补洞（`fill_land_nodata`）之后这个数应当是 0；**不是 0 就说明还有洞没补**，
+    而洞会被静默读成「寒带」。它是断言第 4 条的判据。
+    """
+    z = np.asarray(land).astype(bool) & (klim == 0)
+    n = int(z.sum())
+    if not n:
+        return 0, None
+    return n, float(np.abs(lat)[z].min())
+
+
 # ---------------------------------------------------------------- TIFF 瓦片流式读
 class _KoppenStrip:
     """柯本 TIFF（LZW、256×256 分块）按**瓦片行**流式解码，只解本图经度窗口内的列。

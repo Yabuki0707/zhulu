@@ -25,6 +25,7 @@ from mapdata import URL_PREFIX                       # noqa: E402
 LAYERS = {
     "plot_png": "地块编码.png",
     "terrain_png": "地形编码.png",
+    "climate_png": "气候编码.png",       # v2 产品层：森林那四种绿由它派生（ADR 0006）
     "dist_png": "分区编码.png",
     "ref_vec": "参考顶点.bin",
 }

@@ -1,0 +1,127 @@
+FEATURECLA	NAME	NAME_ZH原文	建议简体名	判定	备注	bbox
+Basin	CONGO BASIN	刚果盆地	刚果盆地	自然区		12.0,-11.8,31.0,9.5
+Basin	GREAT ARTESIAN BASIN	大自流盆地	大自流盆地	自然区		135.8,-31.2,148.2,-20.7
+Basin	Junggar Basin	准噶尔盆地	准噶尔盆地	自然区		83.2,44.1,89.6,45.9
+Basin	MURRAY-DARLING BASIN	墨累-達令流域	墨累-达令流域	自然区		138.8,-36.9,151.5,-24.2
+Basin	Qaidam Basin	柴达木盆地	柴达木盆地	自然区		91.8,36.0,98.2,38.5
+Basin	SICHUAN BASIN	四川盆地	四川盆地	自然区		103.3,28.7,107.7,32.1
+Basin	TARIM BASIN	塔里木盆地	塔里木盆地	自然区		76.1,36.6,90.7,41.7
+Delta	Danube Delta	多瑙河三角洲	多瑙河三角洲	自然区		28.7,44.7,29.7,45.4
+Delta	Ganges Delta	恒河三角洲	恒河三角洲	自然区		87.5,21.6,91.5,24.4
+Delta	Indus Delta	印度河三角洲	印度河三角洲	自然区		67.2,23.7,68.4,25.0
+Delta	Irrawaddy Delta	伊洛瓦底三角洲	伊洛瓦底三角洲	自然区		94.2,15.7,96.4,17.8
+Delta	Lena Delta	勒拿河三角洲	勒拿河三角洲	自然区		123.3,72.1,129.4,73.8
+Delta	Mekong Delta	湄公河三角洲	湄公河三角洲	自然区		105.2,9.4,107.1,11.0
+Delta	Nile Delta	尼罗河三角洲	尼罗河三角洲	自然区		29.8,30.1,32.1,31.6
+Delta	Volga Delta	伏爾加三角洲	伏尔加三角洲	自然区		47.5,45.5,48.9,46.8
+Delta	Zambezi Delta	赞比西三角洲	赞比西三角洲	自然区		35.7,-18.9,36.7,-18.1
+Desert	An Nafud Desert	內夫得沙漠	内夫得沙漠	自然区		39.6,27.6,44.8,29.9
+Desert	BETPAQDALA DESERT	贝帕克达拉沙漠	贝帕克达拉沙漠	自然区		67.4,43.0,73.9,46.6
+Desert	Chalbi Desert	查尔比沙漠	查尔比沙漠	自然区		35.5,0.4,40.3,4.8
+Desert	Danakil	达纳基尔沙漠	达纳基尔洼地	自然区	Danakil 实为『达纳基尔洼地』（低于海平面），NE 归类 Desert，译名宜作『达纳基尔洼地/沙漠』。	39.8,10.4,43.7,15.1
+Desert	Eastern Desert	東部沙漠	东部沙漠	自然区		30.7,22.0,36.9,30.6
+Desert	GARAGUM DESERT	卡拉庫姆沙漠	卡拉库姆沙漠	自然区		55.9,36.2,67.2,45.5
+Desert	Gibson Desert	吉布森沙漠	吉布森沙漠	自然区		122.9,-25.8,127.1,-23.0
+Desert	GOBI DESERT	大漠	戈壁	自然区	NAME_ZH 原为『大漠』，过于笼统；该多边形（94.5–117.7E/37.8–47.8N）即戈壁，改『戈壁』。	94.5,37.8,117.7,47.8
+Desert	GREAT SANDY DESERT	大沙沙漠	大沙沙漠	自然区		121.3,-22.6,128.4,-18.6
+Desert	GREAT VICTORIA DESERT	大维多利亚沙漠	大维多利亚沙漠	自然区		123.8,-29.8,132.4,-26.6
+Desert	KALAHARI DESERT	喀拉哈里沙漠	喀拉哈里沙漠	自然区		13.1,-30.5,25.4,-15.2
+Desert	Kavir Desert	卡维尔盐漠	卡维尔盐漠	自然区		52.8,33.4,57.0,35.7
+Desert	LIBYAN DESERT	利比亚沙漠	利比亚沙漠	自然区		18.2,9.3,34.0,32.9
+Desert	LUT DESERT	盧特沙漠	卢特沙漠	自然区		56.3,29.8,59.9,33.7
+Desert	Makgadikgadi Pan	馬卡迪卡迪鹽沼	马卡迪卡迪盐沼	自然区		24.3,-21.2,26.3,-20.0
+Desert	Margo Desert	玛戈沙漠	玛戈沙漠	自然区		61.3,30.2,65.0,32.4
+Desert	Mu Us Desert	鄂爾多斯沙漠	毛乌素沙地	自然区	Mu Us 通译『毛乌素沙地』；NE 中文『鄂尔多斯沙漠』易与鄂尔多斯高原混淆。	105.1,37.2,111.3,40.9
+Desert	Negev Desert	內蓋夫	内盖夫	自然区		34.2,29.6,35.4,31.4
+Desert	NUBIAN DESERT	努比亞沙漠	努比亚沙漠	自然区		30.4,17.8,37.2,22.1
+Desert	PUNJAB	旁遮普地区	旁遮普地区	存疑	NE 标为 Desert，但旁遮普是跨印巴的历史/文化区名（亦是巴基斯坦省名），并非沙漠。类别与命名均存疑，建议单列或删除。	71.3,29.2,76.6,33.0
+Desert	QIZILQUM DESERT	克孜勒库姆沙漠	克孜勒库姆沙漠	自然区		59.0,39.1,69.1,47.5
+Desert	Rigestan	雷吉斯坦沙漠	雷吉斯坦沙漠	自然区		63.5,29.6,66.2,32.2
+Desert	RUB’ AL KHALI	鲁卜哈利沙漠	鲁卜哈利沙漠	自然区		44.8,16.5,56.2,24.3
+Desert	SAHARA	撒哈拉沙漠	撒哈拉沙漠	自然区		-17.1,9.3,38.5,34.6
+Desert	Sarïr Kalanshiyu ar Ramli al Kabi	卡兰西奥大沙海	大沙海	存疑	NE 英文名拼写异常（≈ Sarir Kalanshiyu ar Ramli al Kabir / Great Sand Sea），中文『卡兰西奥大沙海』非通行译名，建议核校后作『大沙海（埃及/利比亚）』。	18.8,24.6,26.2,31.3
+Desert	Simpson Desert	辛普森沙漠	辛普森沙漠	自然区		135.8,-26.9,139.0,-23.7
+Desert	Strzelecki Desert	斯切莱茨基沙漠	斯切莱茨基沙漠	自然区		140.1,-31.1,143.1,-28.4
+Desert	SYRIAN DESERT	叙利亚沙漠	叙利亚沙漠	自然区		36.9,30.5,43.5,34.1
+Desert	TAKLIMAKAN DESERT	塔克拉玛干沙漠	塔克拉玛干沙漠	自然区		78.3,37.2,87.7,40.6
+Desert	Tanami Desert	塔纳米沙漠	塔纳米沙漠	自然区		130.3,-20.7,133.1,-18.6
+Desert	THAR DESERT	塔尔沙漠	塔尔沙漠	自然区		68.4,24.4,75.7,30.5
+Desert	Wahiba Sands	瓦希伯沙漠	瓦希伯沙漠	自然区		58.2,21.1,59.3,22.4
+Desert	WESTERN DESERT	西部沙漠	西部沙漠	自然区		25.1,24.8,32.9,30.3
+Geoarea	ALASKA	阿拉斯加州	阿拉斯加州	政治名	NE 归为 Geoarea，实为美国州名（行政区），非自然地理单元。建议删除；若需北美高纬自然区，另用『阿拉斯加苔原/布鲁克斯岭』等。	-178.2,51.4,179.8,71.4
+Geoarea	ANATOLIA	安納托利亞	安纳托利亚	存疑	历史—地理宏观区名（小亚细亚），既是半岛又含高原，与本层已排除的 Peninsula/Plateau 重叠。是否作自然区待定。	26.1,36.0,44.5,42.1
+Geoarea	BALUCHISTAN	俾路支斯坦	俾路支斯坦	存疑	跨巴基斯坦/伊朗/阿富汗的历史—文化区名，同时是巴基斯坦省名；非自然地理单元。是否作自然区待定。	57.3,25.1,66.5,30.5
+Geoarea	Banaadir Coast	巴纳迪尔海岸	巴纳迪尔海岸	政治名	Banaadir 是索马里一级行政区（gobol，含摩加迪沙），行政区名。建议删除或改自然名『索马里海岸低地』。	42.5,-0.3,51.4,11.9
+Geoarea	Dampier Land	丹皮尔地	丹皮尔地	自然区		122.1,-18.0,123.5,-16.4
+Geoarea	El Gezira	杰济拉	杰济拉	存疑	青、白尼罗河之间的冲积平原，既是自然地名义是苏丹州名，易混。建议保留自然义并加注。	32.2,11.4,34.3,15.6
+Geoarea	Finnish Lake Region	芬兰湖区	芬兰湖区	自然区		23.3,60.7,30.9,63.7
+Geoarea	Hexi Corridor	河西走廊	河西走廊	自然区		95.6,37.7,103.7,41.2
+Geoarea	Karelia	卡累利阿共和国	卡累利阿共和国	政治名	俄联邦主体『卡累利阿共和国』，行政区名。建议删除；自然区可另用『卡累利阿地峡/奥涅加湖低地』。	28.1,59.9,36.2,67.4
+Geoarea	LAPLAND	拉普蘭區	拉普兰区	政治名	萨米人分布区，跨芬/挪/瑞/俄的行政—文化区名。建议删除或改自然名『拉普兰苔原』。	17.0,65.6,30.7,69.2
+Geoarea	Mesopotamia	美索不达米亚	美索不达米亚	存疑	历史地理区名（两河平原），非自然单元。建议改作『两河平原』或删除。	38.1,30.9,47.5,37.1
+Geoarea	Ogaden	欧加登	欧加登	存疑	埃塞俄比亚索马里族地区的争议性区域名，政治/族群色彩强，非自然单元。建议删除。	41.5,4.0,47.5,9.5
+Geoarea	Riverina	瑞福利纳	瑞福利纳	存疑	澳大利亚新南威尔士的农业/地理区名，行政—经济色彩较强。是否作自然区待定。	143.2,-36.1,148.8,-33.0
+Geoarea	SIBERIA	西伯利亚	西伯利亚	政治名	宏观地域/大区名，非自然地理单元。建议删除；其自然区已由本层『西西伯利亚平原、中西伯利亚高原、北西伯利亚低地』等覆盖。	68.0,49.4,153.1,73.7
+Geoarea	SUDD	蘇德沼澤	苏德沼泽	自然区		27.8,4.8,33.6,10.0
+Gorge	Tsangpo Gorge	雅鲁藏布大峡谷	雅鲁藏布大峡谷	自然区		94.7,27.8,95.8,29.9
+Gorge	Yangtze Gorges	长江三峡	长江三峡	自然区		107.4,30.0,111.9,31.7
+Lowland	CASPIAN DEPRESSION	裡海盆地	里海盆地	自然区		44.4,44.1,55.5,49.2
+Lowland	KOLYMA LOWLAND	科雷马低地	科雷马低地	自然区		149.8,66.8,159.7,71.1
+Lowland	NORTH SIBERIAN LOWLAND	北西伯利亞低地	北西伯利亚低地	自然区		96.9,70.8,118.9,73.0
+Lowland	VYCHEGDA LOWLAND	维切格达低地	维切格达低地	自然区		48.0,59.8,56.6,64.9
+Lowland	WESTERN SIBERIAN PLAIN	西西伯利亚平原	西西伯利亚平原	自然区		65.1,55.5,93.8,69.8
+Plain	Baltic Plains	波罗的海平原	波罗的海平原	自然区		21.0,55.2,28.2,59.6
+Plain	Darling Downs	达令山丘	达令山丘	自然区		148.2,-28.8,151.6,-26.1
+Plain	GANGES PLAIN	中央平原	恒河平原	自然区	NAME_EN=Indo-Gangetic Plain，NE 中文却作『中央平原』，指代错误，改『恒河平原』（印度河-恒河平原）。	76.6,21.7,91.3,30.5
+Plain	Hasa Plain	哈萨平原	哈萨平原	自然区		47.1,25.1,50.2,29.6
+Plain	Iwembere Steppe	伊温贝尔草原	伊温贝尔草原	自然区		29.7,-9.6,34.6,-2.1
+Plain	KAZAKH STEPPE	哈薩克草原	哈萨克草原	自然区		52.0,46.8,84.3,55.4
+Plain	MANCHURIAN PLAIN	东北平原	东北平原	自然区		119.5,40.7,127.9,49.1
+Plain	Masai Steppe	马萨伊草原	马萨伊草原	自然区		33.8,-7.8,38.2,-3.2
+Plain	NORTH CHINA PLAIN	华北平原	华北平原	自然区		113.1,30.3,121.9,40.3
+Plain	NORTHERN EUROPEAN PLAIN	北歐平原	北欧平原	自然区		-4.8,43.5,66.3,69.9
+Plain	NULLARBOR PLAIN	纳拉伯平原	纳拉伯平原	自然区		124.3,-32.6,132.4,-29.9
+Plain	PONTIC STEPPE	東歐大草原	东欧大草原	自然区		26.9,42.4,56.4,55.1
+Plain	SAHEL	萨赫勒平原	萨赫勒平原	自然区		-16.5,9.3,38.4,23.0
+Plain	Serengeti Plains	塞倫蓋提	塞伦盖提	自然区		32.8,-4.9,36.1,-0.2
+Plain	Tihāmah	帖哈麦	帖哈麦	自然区		39.4,14.3,43.4,21.5
+Plain	TURAN LOWLAND	图兰低地	图兰低地	自然区		55.9,36.2,69.1,47.5
+Plateau	Aldan Upland	阿尔丹高地	阿尔丹高地	自然区		126.6,56.8,131.9,59.1
+Plateau	Atherton Tableland		阿瑟顿台地	自然区	NE 无中文名（NAME_ZH 为空），据 NAME_EN 补『阿瑟顿台地』（昆士兰）。	144.4,-18.2,146.1,-16.6
+Plateau	Azov Upland	亞速高地	亚速高地	自然区		35.5,46.8,38.8,48.8
+Plateau	Barkly Tableland	巴克利高地	巴克利高地	自然区		133.5,-19.4,139.0,-15.3
+Plateau	Buckland Tableland	巴克兰高地	巴克兰高地	自然区		146.8,-25.1,148.5,-24.0
+Plateau	CENTRAL RUSSIAN UPLAND	中俄羅斯高地	中俄罗斯高地	自然区		33.9,49.8,39.7,55.0
+Plateau	CENTRAL SIBERIAN PLATEAU	中西伯利亞高原	中西伯利亚高原	自然区		88.4,58.1,130.1,71.4
+Plateau	Chota Nägpur Plateau	焦达讷格布尔高原	焦达讷格布尔高原	自然区		79.7,21.0,86.9,25.2
+Plateau	DECCAN PLATEAU	德干高原	德干高原	自然区		74.2,12.5,81.3,20.1
+Plateau	Dnieper Upland	第聶伯高地	第聂伯高地	自然区		29.5,47.4,33.2,50.1
+Plateau	Finnmarks-vidda	芬馬克高原	芬马克高原	自然区		23.6,68.4,26.5,69.8
+Plateau	Great Karroo	格雷特卡鲁高地	大卡鲁	自然区	Great Karoo 通译『大卡鲁』（南非），非音译『格雷特卡鲁』。	19.2,-33.6,25.1,-31.5
+Plateau	Jabal al Abyad Plateau	阿比让高原	白山高原	自然区	NE 中文『阿比让高原』误把 Jabal al Abyad 当成 Abidjan（科特迪瓦首都）；Jabal al Abyad 义为『白山』。	24.2,16.4,27.6,20.6
+Plateau	Jilf al Kabir Plateau	吉尔夫·基比尔高原	吉尔夫·基比尔高原	自然区		24.7,22.8,28.2,25.5
+Plateau	KATANGA PLATEAU	加丹加高原	加丹加高原	自然区		21.7,-17.1,32.9,-4.5
+Plateau	KAZAKH UPLAND	哈萨克高地	哈萨克高地	自然区		69.2,46.3,78.4,50.7
+Plateau	Khorat Plat.	呵叻高原	呵叻高原	自然区		99.7,15.0,105.4,18.6
+Plateau	KIMBERLEY PLATEAU	金伯利高地	金伯利高地	自然区		124.7,-18.0,128.4,-14.2
+Plateau	Libyan Plateau	利比亚高地	利比亚高地	自然区		20.4,29.4,28.8,32.4
+Plateau	Loess Plateau	黄土高原	黄土高原	自然区		103.6,34.6,111.3,37.8
+Plateau	MONGOLIAN PLATEAU	蒙古高原	蒙古高原	自然区		97.3,41.8,115.2,50.7
+Plateau	N.I. Volcanic Plateau	北爱尔兰火山高地	北岛火山高原	自然区	REGION=Oceania/New Zealand、bbox 175.3–176.0E/38.9–39.6S，『N.I.』=新西兰北岛；NE 中文误作『北爱尔兰火山高地』。	175.3,-39.6,176.0,-38.9
+Plateau	Northern Karroo	卡魯	北卡鲁	自然区	Northern Karoo 通译『北卡鲁』，NE 中文漏译 Northern。	17.5,-32.1,26.3,-28.4
+Plateau	Okhotsk-Kolyma Upland	鄂霍次克科利马高地	鄂霍次克科利马高地	自然区		146.2,60.0,153.6,62.7
+Plateau	PLATEAU OF TIBET	青藏高原	青藏高原	自然区		73.0,26.9,104.1,40.1
+Plateau	PUTORANA PLATEAU	普托拉納高原	普托拉纳高原	自然区		100.5,67.1,107.3,70.3
+Plateau	SHAN PLATEAU	掸部高原	掸部高原	自然区		94.3,19.2,99.0,24.1
+Plateau	STANOVOY UPLAND	斯坦诺沃伊高地	斯坦诺沃伊高地	自然区		108.3,53.7,116.4,59.9
+Plateau	Stavropol’ Plateau	斯塔夫罗波尔高原	斯塔夫罗波尔高原	自然区		41.3,44.4,45.1,46.1
+Plateau	Ustyurt Plateau	乌斯秋尔特高原	乌斯秋尔特高原	自然区		53.2,42.7,57.4,45.3
+Plateau	Volga Upland	伏爾加高地	伏尔加高地	自然区		44.0,49.1,48.4,55.6
+Plateau	WESTERN PLATEAU	澳大利亚西部高原	澳大利亚西部高原	自然区		115.5,-30.0,135.8,-20.6
+Plateau	YUNGUI PLATEAU	云贵高原	云贵高原	自然区		98.1,23.3,107.2,29.3
+Tundra	Bol’shezemel’skaya Tundra	博尔谢泽梅尔斯卡亚苔原	博尔谢泽梅尔斯卡亚苔原	自然区		47.1,64.6,66.6,69.9
+Valley	Fergana Valley	费尔干纳盆地	费尔干纳盆地	自然区		69.8,40.2,73.1,41.2
+Valley	GREAT RIFT VALLEY	東非大裂谷	东非大裂谷	自然区		33.7,-5.3,44.2,15.4
+Valley	GREAT RIFT VALLEY	東非大裂谷	东非大裂谷	自然区		28.9,-15.6,35.8,2.4
+Valley	Vale of Kashmir	喀什米尔谷	克什米尔谷地	自然区	『喀什米尔』为旧译，大陆通译『克什米尔』。	75.0,32.6,77.5,33.9
+Wetlands	Sundarbans	蘇達班	苏达班	自然区		87.5,21.6,91.2,23.2

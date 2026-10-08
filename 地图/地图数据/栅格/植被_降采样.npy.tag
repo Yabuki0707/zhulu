@@ -1,1 +1,1 @@
-{"encoding": "family-v1"}
+{"encoding": "cover-v2"}

@@ -73,13 +73,14 @@ OUT = RASTER
 # 栅格层文件名（也中文，见 tools/mapdata.py）
 F_PLOT, F_DIST, F_TERRAIN, F_REFV, F_META = (
     "地块编码.png", "分区编码.png", "地形编码.png", "参考顶点.bin", "台账.json")
+F_CLIM = "气候编码.png"                    # 产品层（v2 起）：两轴合成一格 = 热量带 × 8 + 干湿
 F_ELEV, F_RELIEF, F_VEG = "高程_降采样.npy", "起伏_降采样.npy", "植被_降采样.npy"
-# 沙漠的海拔上限。柯本把羌塘/阿里（4700–5300 m）也判成干旱，于是青藏整片成了沙漠。
+# 荒漠的海拔上限。柯本把羌塘/阿里（4700–5300 m）也判成干旱，于是青藏整片成了荒漠。
 # 实测：戈壁 p99 2131/max 3024、柴达木 p50 2938、羌塘 p50 4740 —— 线画在 3500 m。
-DESERT_MAX_ELEV = 3500.0
+WASTE_MAX_ELEV = 3500.0
 # 河段短于这么多格就不画：低于 6.9 km 栅格的分辨能力，画出来是散点（见 cleanup_river_specks）。
 RIVER_MIN_CELLS = 4
-F_CLIMATE = "气候_降采样.npy"
+F_CLIMATE = "气候_降采样.npy"              # 构建期中间层（柯本类栅格），改规则不必重读 130 MB
 F_WATER = "水体_降采样.npy"
 
 # 世界窗口与格边长的唯一出处（编辑器筛单元用的是同一份，见 tools/mapdata.py）
@@ -87,9 +88,46 @@ LON0, LON1 = SCOPE_LON0, SCOPE_LON1
 LAT0, LAT1 = SCOPE_LAT0, SCOPE_LAT1
 
 TERRAIN_LEGEND = TR.LEGEND
-(T_OCEAN, T_LAKE, T_RIVER, T_ICE, T_DESERT, T_BARE, T_PLATEAU, T_MOUNTAIN, T_HILL, T_PLAIN,
- T_FOR_NEEDLE, T_FOR_BROAD, T_FOR_RAIN, T_GRASS, T_MARSH,
- T_TUNDRA) = range(len(TERRAIN_LEGEND))
+(T_OCEAN, T_LAKE, T_RIVER, T_ICE, T_FOREST, T_GRASS, T_WASTE, T_MARSH, T_TIDAL, T_OASIS,
+ T_PLAIN, T_HILL, T_PLATEAU, T_MOUNTAIN) = range(len(TERRAIN_LEGEND))
+
+
+def assert_contract(terrain, plot_id, districts, heat, moist, klim, lat, land, log=print):
+    """四条数据契约断言（`docs/adr/0006`）。**红一条就抛，不许静默落盘。**
+
+    为什么值得为它们开一个函数：v2 把地形压到 4 位、地块压到 14 位、块区压到 8 位局部码，
+    余量都不大；而"余量用尽"这件事一旦发生，后果是**静默截断**（溢出回绕写进 PNG，图上
+    看不出是哪一格坏了）。所以宁可让管线在最后一步红掉。
+
+    第 4 条最隐蔽：干湿码 0 同时表示「寒带」与「无气候数据」，于是数据空洞会被读成寒带。
+    **它第一次上线就把这条拦下来了**：原先以为那些洞都在极地（只看过纬度最高的 3 格就写了
+    "实测全在 81.7–81.8°N"），实测 11,352 格里有阿拉斯加、波罗的海、堪察加，纬度最低到
+    9.4°N——柯本把水体与冰盖 mask 成 nodata，而 NE 说那是陆。修法是 `CL.fill_land_nodata`
+    先把洞补上，这条断言则守着它不再长回来。
+    """
+    bad = []
+    if int(terrain.max()) > 15:
+        bad.append(f"覆盖类最大 {int(terrain.max())} > 15（4 位装不下）")
+    if int(plot_id.max()) > 16383:
+        bad.append(f"地块编号最大 {int(plot_id.max())} > 16,383（14 位装不下）")
+    if heat is not None and int(heat.max()) > 3:
+        bad.append(f"热量带最大 {int(heat.max())} > 3（2 位装不下）")
+    if moist is not None and int(moist.max()) > 7:
+        bad.append(f"干湿码最大 {int(moist.max())} > 7（3 位装不下）")
+    per_plot = {}
+    for d in districts:
+        per_plot[d["plot"]] = per_plot.get(d["plot"], 0) + 1
+    worst = max(per_plot.values()) if per_plot else 0
+    if worst > 255:
+        bad.append(f"单个地块下辖块区最多 {worst} > 255（8 位局部码装不下）")
+    if klim is not None:
+        n, minlat = CL.polar_nodata(klim, lat, land)
+        if n:
+            bad.append(f"陆地上还有 {n} 格无气候数据（最小 |纬度| {minlat:.1f}°）——"
+                       f"干湿码 0 会把它静默读成「寒带」；先补洞（CL.fill_land_nodata）")
+    log(f"  契约断言：覆盖 ≤15 ✓  地块 ≤16,383 ✓  热量带 ≤3 / 干湿 ≤7 ✓  "
+        f"每地块块区 ≤255（实测最多 {worst}）✓  陆地无气候洞 ✓")
+    assert not bad, "数据契约被破坏：\n  · " + "\n  · ".join(bad)
 
 
 # ---------------------------------------------------------------- 读取
@@ -518,27 +556,41 @@ def main() -> int:
                 water_path=os.path.join(OUT, F_WATER))
             if veg is not None:
                 share = float((veg != TR.VEG_UNKNOWN).mean())
-                show = tuple(TR.FAM_AFFINITY) + (T_GRASS, T_BARE, T_PLAIN)
-                print(f"  植被层覆盖 {share * 100:.1f}% 像元（" +
-                      "，".join(f"{TR.FAM_NAMES.get(t) or TR.LEGEND[t]} {int((veg == t).sum())}"
-                                for t in show) + "）")
+                show = ((T_GRASS, "草原"), (T_PLAIN, "农田聚落"), (TR.CAND_FOREST, "森林"),
+                        (TR.CAND_BARE, "裸地"))
+                print(f"  覆盖层覆盖 {share * 100:.1f}% 像元（" +
+                      "，".join(f"{nm} {int((veg == t).sum()):,}" for t, nm in show) + "）")
                 print(f"  水体占比层：≥{TR.WATER_PCT}% 的格 {int((water >= TR.WATER_PCT).sum()):,}"
                       f"（含海洋与湖泊；不是既有水面的碎水见下面「碎水补面」那行）")
-        terrain = TR.classify(elev, relief, veg, land, LAT)   # lat 用于林型的权重制
+        terrain = TR.classify(elev, relief, veg, land)      # v2：不再要纬度（林型权重制已删）
 
-        # 柯本气候类（沙漠/干旱的判据来源）。读它只为了一件事：**取代表时代替手绘面**。
-        # 缓存成 (H, W) uint8 的类栅格而不是布尔掩膜 —— 将来要按气候带细分草原/苔原，
-        # 改规则不必重读 130 MB 的 TIFF。
-        klim = None
+        # 柯本气候类 → 两个轴（热量带 × 干湿），并**出产品层** `气候编码.png`。
+        # v1 这里只是中间层（判沙漠用），v2 升格为产品层：地形表把气候那一半交还给了它
+        # （沙漠/苔原/雨林/针叶/阔叶都不再存储，改由「覆盖 × 气候」派生，见 ADR 0006）。
+        # 码 = 热量带 × 8 + 干湿（0..31）。**海洋格上的气候码无意义**（恒 0），读取方一律
+        # 先看覆盖层是不是水。
+        klim = heat = moist = None
         if not args.no_veg:
             klim = CL.koppen_from_zip(W, H, cell, LON0, LAT1, KOPPEN_ZIP,
                                       cache_path=os.path.join(OUT, F_CLIMATE),
                                       reuse_cache=True)
             if klim is not None:
                 arid = np.isin(klim, CL.ARID)
-                print(f"  气候层：{CL.summarise(klim, 6)}")
+                # **先补洞**（柯本把水体与冰盖 mask 成 nodata，而 NE 说那是陆；不补就会把
+                # 阿拉斯加 58°N 读成寒带——这条是断言第 4 条逼出来的，见 assert_contract）。
+                klim, _n_hole = CL.fill_land_nodata(klim, land, log=print)
+                heat, moist = CL.axes(klim, LAT)
+                kod = CL.pack(heat, moist)
+                Image.fromarray(kod, "L").save(os.path.join(OUT, F_CLIM), optimize=True)
+                print(f"  气候层（柯本）：{CL.summarise(klim, 4)}")
                 print(f"    干旱气候（BWh/BWk/BSh/BSk）{int(arid.sum()):,} 格"
                       f"（占全图 {arid.mean() * 100:.1f}%）")
+                print("    热量带：" + "，".join(
+                    f"{nm} {int((heat == i).sum()):,}" for i, nm in enumerate(CL.HEAT_NAMES)))
+                print("    干湿：" + "，".join(
+                    f"{nm} {int((moist == i).sum()):,}"
+                    for i, nm in enumerate(CL.MOIST_NAMES) if (moist == i).any()))
+                print(f"    {F_CLIM} 已出（码 = 热量带 × 8 + 干湿，0..31）")
 
         def burn(feats, value, label, buf=0.0, filt=None, only_from=None, only_veg=None):
             """only_from：只允许覆盖这些**既有地形类**；only_veg：只允许覆盖这些**土地覆盖候选**。
@@ -614,48 +666,56 @@ def main() -> int:
             terrain[mask] = value
             print(f"  {label}：{nline} 条折线 → {int(mask.sum())} 格")
 
-        # Natural Earth 在这条管线里只干两件事：
-        #   ① 水体与冰雪（湖泊/河流/冰川）——物理事实，土地覆盖产品分不了这么细；
-        #   ② 苔原的**细化**——且只允许覆盖"本来就没森林"的类，否则会把泰加林盖成苔原。
-        # **高原与山脉不再烧**：那是地理区划的手绘椭圆块（一条条褐色团），
-        # 形态交给高程 + 格内极差（terrain.landform），出来的是真实山系。
-        #
-        # **沙漠不再用 NE 的手绘面**（2026-10-08 改，需求方报"沙漠边界太平滑"）。
-        # 老做法是「NE 沙漠面内 ∧ LC100 裸地 → 沙漠」，可那个面**仍是掩膜**：面内的边是
-        # LC100 的，**外轮廓与交界仍是 NE 的**。实测那条缝外侧 25.5% 仍是 LC100 裸地
-        # （同一片裸地被切成两半），最长一段 207 km 笔直；同为裸露地表，沙漠的周长/√面积
-        # = 34.9、裸地 114.3（面积相当却光滑 3.3 倍）。NE 的 Desert 面平均只有 76 个顶点
-        # （58 个面共 4,434 点；戈壁整个只有 100 个）—— 原数据就这么粗。
-        #
-        # 改用**气候**当那层判据：柯本 BWh/BWk/BSh/BSk = 干旱。
-        #   沙漠 = LC100 判「裸地」 ∧ 干旱气候
-        # 于是沙漠的每一条边都来自数据（100 米土地覆盖，或 1 km 气候分类），NE 那一层
-        # 彻底不要。同一条判据下 BSh/BSk（草原气候）区里的裸地仍记「裸地」——
-        # 半荒漠草原本来就是草原，这与 §14.11 的口径一致。
-        # 详见 tools/climate.py 与 `设计笔记03` §14.11。
+        # Natural Earth 在这条管线里现在只剩一件事：**水与冰**（湖泊 / 河流 / 冰川）——
+        # 那是物理事实，土地覆盖产品分不了这么细。
+        #   · **高原与山脉不再烧**：那是地理区划的手绘椭圆块（一条条褐色团），形态交给
+        #     高程 + 格内极差（terrain.landform），出来的是真实山系。
+        #   · **荒漠不再用 NE 的手绘沙漠面**（2026-10-08 改，需求方报"沙漠边界太平滑"）。
+        #     老做法是「NE 沙漠面内 ∧ LC100 裸地 → 沙漠」，可那个面**仍是掩膜**：面内的边
+        #     是 LC100 的，**外轮廓与交界仍是 NE 的**。实测那条缝外侧 25.5% 仍是 LC100 裸地
+        #     （同一片裸地被切成两半），最长一段 207 km 笔直。改用**气候**当判据之后，
+        #     荒漠/绿洲的每一条边都来自数据（100 m 土地覆盖 或 1 km 气候分类）。
+        #   · **苔原整段删除**（v2）：它是 `草原 ∧ 寒带`，在显示层派生，不再存储
+        #     ——`设计笔记03` §14.12 那个"苔原走 NE 手绘面还是柯本 ET"的悬案随之结案。
+        # 详见 tools/climate.py、tools/display_class.py 与 `设计笔记03` §14.11。
         REG = ne_features(NE_REGIONS)
-        if klim is not None:
-            # **海拔上限**：沙漠不吃高山。柯本把羌塘/阿里（4700–5300 m）也判成 BWk/BSk，
-            # 于是整片青藏高原成了沙漠——需求方看图报的正是这个。实测各沙漠区的海拔：
-            # 戈壁 p99 2131 / max 3024，塔里木盆底 ~1200，撒哈拉 319，阿拉伯 519，伊朗 1125；
-            # 羌塘 p50 4740。中间 3200–4300 m 是空的，所以这条线画在 3500 m：
-            # 戈壁/柴达木（p50 2938）留得住，羌塘/昆仑（3600+）留给「高原/山地」。
-            dry = (np.isin(klim, CL.ARID) & (veg == T_BARE) & land.astype(bool)
-                   & (elev < DESERT_MAX_ELEV))
-            terrain[dry] = T_DESERT
-            print(f"  沙漠（LC100 裸地 ∧ 柯本干旱气候 ∧ 海拔 < {DESERT_MAX_ELEV:.0f} m）："
+        # **覆盖里那三类要靠气候与海岸才判得出来**：荒漠 / 绿洲 / 滩涂。
+        if klim is not None and veg is not None:
+            arid = np.isin(klim, CL.ARID)
+            # 荒漠 = 干旱气候 ∧ LC100 裸地（码 60）∧ 海拔上限。
+            # **海拔上限**是踩出来的：柯本把羌塘/阿里（4700–5300 m）也判成 BWk/BSk，于是
+            # 整片青藏高原成了荒漠——需求方看图报的正是这个。实测各荒漠区的海拔：戈壁
+            # p99 2131 / max 3024、塔里木盆底 ~1200、撒哈拉 319、阿拉伯 519、伊朗 1125；
+            # 羌塘 p50 4740。中间 3200–4300 m 是空的，所以这条线画在 3500 m：戈壁/柴达木
+            # （p50 2938）留得住，羌塘/昆仑（3600+）留给「高原/山地」。
+            dry = arid & (veg == TR.CAND_BARE) & land.astype(bool) & (elev < WASTE_MAX_ELEV)
+            terrain[dry] = T_WASTE
+            # 绿洲 = 干旱气候 ∧ LC100 可耕地（40/50）。现代灌溉带的形状就是古绿洲带：
+            # 实测 73,749 格，落在印度河、尼罗河、两河、塔里木南缘、河西走廊。
+            # 绿洲 = **真沙漠气候**（BWh/BWk）∧ LC100 可耕地（40/50）。
+            # ⚠️ 这里只能用 DESERT，不能用 ARID：华北平原在柯本里是 **BSk**（冬干、年降水
+            # 约 550 mm），用 ARID 就会把中国最著名的一片农田判成「绿洲」——`check_terrain`
+            # 的华北平原那一条第一次跑就抓到了这个。改成"真沙漠气候"之后，留下的正是
+            # 需要灌溉才种得活的地方：印度河下游、尼罗河、两河、塔里木南缘、河西走廊。
+            oasis = np.isin(klim, CL.DESERT) & (veg == T_PLAIN) & land.astype(bool)
+            terrain[oasis] = T_OASIS
+            print(f"  荒漠（LC100 裸地 ∧ 柯本干旱 ∧ 海拔 < {WASTE_MAX_ELEV:.0f} m）："
                   f"{int(dry.sum()):,} 格")
+            print(f"  绿洲（LC100 可耕地 ∧ 柯本真沙漠 BWh/BWk）：{int(oasis.sum()):,} 格")
         elif veg is not None:
-            burn(REG, T_DESERT, "沙漠（退路：NE 沙漠面内 LC100 裸地 → 沙漠）",
-                 filt=lambda r: r.get("FEATURECLA") == "Desert", only_veg=(T_BARE,))
-        else:
-            print("  ! 既无柯本气候也无 LC100：沙漠层跳过（否则会把森林盖成沙漠）")
-        if veg is not None:
-            burn(REG, T_TUNDRA, "苔原（NE 苔原区内，LC100 的裸地/草原/苔藓 → 苔原）",
-                 filt=lambda r: r.get("FEATURECLA") == "Tundra",
-                 only_veg=(T_BARE, T_GRASS, T_TUNDRA))
+            print("  ! 无柯本气候：荒漠/绿洲跳过（否则会把草原盖成荒漠）")
         burn(ne_features(NE_GLACIATED), T_ICE, "冰川")
         burn(ne_features(NE_LAKES), T_LAKE, "湖泊")
+        # 滩涂 = 贴海的潮滩（盐沼与光泥滩）。**放在河流之前**，是为了让这批格不参加
+        # 后面的「碎水补面」——否则它们会被点成假河（实测贴海的 LC100 湿地有 3,503 格）。
+        # 海洋口径用 `land == 0`（本管线唯一的海洋口径），不用 `terrain == 海洋`：
+        # 这时湖面刚烧完，里海/贝加尔那类内海还是陆地。
+        if veg is not None:
+            from scipy import ndimage as _nd
+            sea8 = _nd.binary_dilation(land == 0, np.ones((3, 3), bool))
+            tidal = land.astype(bool) & sea8 & (veg == T_MARSH)
+            terrain[tidal] = T_TIDAL
+            print(f"  滩涂（LC100 湿地 ∧ 8 邻接海洋）：{int(tidal.sum()):,} 格")
         was_lake = terrain == T_LAKE
         # 河流：**HydroRIVERS（主）+ Natural Earth（兜）取并集**。
         # 为什么换：NE 的河流层全库 1,473 个要素，长江入海段（江阴→崇明，约 230 km）
@@ -682,7 +742,8 @@ def main() -> int:
         if water is not None:
             from scipy import ndimage
             is_water = np.isin(terrain, (T_OCEAN, T_LAKE, T_RIVER))
-            cand = (water >= TR.WATER_PCT) & ~is_water
+            # 滩涂不参加补面：它本来就是"贴海的湿格"，补进来只会变成假河（见上面滩涂那行）。
+            cand = (water >= TR.WATER_PCT) & ~is_water & (terrain != T_TIDAL)
             if cand.any():
                 seed = is_water | cand                       # 一起连通，才知道谁挨着水
                 lab = ndimage.label(seed, structure=np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))[0]
@@ -730,6 +791,10 @@ def main() -> int:
     counts = np.bincount(terrain.ravel(), minlength=len(TERRAIN_LEGEND))
     ratio = {TERRAIN_LEGEND[i]: round(int(c) / terrain.size, 4)
              for i, c in enumerate(counts) if c}
+    # **数据契约断言**放在落盘之前（ADR 0006）：4 位覆盖、14 位地块、8 位块区局部码，
+    # 余量都不大，而"余量用尽"的后果是静默截断——宁可让管线在这一步红掉。
+    from display_class import entries as _disp_entries, note as _disp_note
+    assert_contract(terrain, plot_id, districts, heat, moist, klim, LAT, land, log=print)
     # 底图指纹：写进台账，也写进 data.js。import_editor 要靠它判断草稿是否基于旧底图
     # （工单 §3.3、§4.2 第 2 步），所以必须在 meta 落盘**之前**算出来。
     base_tag = make_base_tag(cell, W, H, len(seeds), covered,
@@ -742,19 +807,28 @@ def main() -> int:
         "terrain_ratio": ratio,
         "plot_id_encoding": "R + G*256（0 = 无地块）",
         "dist_id_encoding": "R + G*256（0 = 无块区；块区隶属于地块）",
-        "terrain_encoding": "8 位灰度，值 = terrain_legend 的下标（16 类）",
+        "terrain_encoding": "8 位灰度，值 = terrain_legend 的下标（**14 类**：水冰 4 + 覆盖 6 + 形态 4）",
         "land_rule": "陆地 = Natural Earth 10m 陆地 ∪ 湖泊 ∪ 冰川区（格心命中）；"
                      "地形层的「海洋」是该掩膜的补集，地块层也被它裁过",
-        "desert_rule": "沙漠 = LC100 判「裸地」 ∧ 柯本干旱气候(BWh/BWk/BSh/BSk)；"
-                       "Natural Earth 的手绘沙漠面不再参与（2026-10-08 改，见 设计笔记03 §14.11）",
-        "river_rule": "河流 = HydroRIVERS v1.0（流量 ≥ 20 m³/s）∪ Natural Earth 河线，按 supercover "
-                      "逐格点燃（4 邻接连通）；再补「水体占比 ≥ 30% 且与水面相连」的碎水格"
-                      "（河口/三角洲，逐格众数会把它们藏成陆地）。河线穿过的格不算海洋",
+        "cover_rule": "覆盖 = LC100 土地覆盖（森林/草原/平原）＋ 由气候与海岸判出的三类："
+                      "荒漠 = 裸地 ∧ 干旱 ∧ 海拔 < 3500 m；绿洲 = 可耕地 ∧ 干旱；"
+                      "滩涂 = LC100 湿地 ∧ 贴海。**沙漠/苔原不存储**，由「覆盖 × 气候」派生"
+                      "（见 ADR 0006）",
+        "climate_rule": "气候 = 柯本两轴：热量带（热带/亚热带/温带/亚寒带，B 组按 |lat| ≤ 23.5 补刀）"
+                        "× 干湿（干旱/半干旱/冬干/冬雨/夏雨/季风/常湿）。**寒带不占热量带取值**，"
+                        "由干湿码 0 表示；海洋格上的气候码无意义",
+        "display_rule": _disp_note(),
+        "river_rule": "河流 = HydroRIVERS v1.0（流量 ≥ 默认 100 m³/s）∪ Natural Earth 河线，"
+                      "按 supercover 逐格点燃（4 邻接连通）；再补「水体占比 ≥ 30% 且与水面相连」"
+                      "的碎水格（河口/三角洲，逐格众数会把它们藏成陆地）。河线穿过的格不算海洋",
         "water_rule": TR.water_frac_note(),
         "climate": {"source": "Beck et al. 2023, Scientific Data 10:724（CC BY 4.0）",
                     "member": CL.KOPPEN_MEMBER,
                     "grid": "1 km（0.00833333°），现值期 1991–2020",
-                    "arid": list(CL.ARID)},
+                    "arid": list(CL.ARID),
+                    "heat_names": list(CL.HEAT_NAMES),
+                    "moist_names": list(CL.MOIST_NAMES),
+                    "encoding": "热量带 × 8 + 干湿（0..31）；干湿 = 0 读作寒带"},
         "ref_encoding": "参考顶点.bin：ZLRV1 魔数 + 环表 + 格坐标×8 的 uint16 顶点对",
         "base_tag": base_tag,
         "districts": districts,
@@ -770,7 +844,7 @@ def main() -> int:
     }
     with open(os.path.join(OUT, F_META), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, separators=(",", ":"))
-    for fn in (F_PLOT, F_TERRAIN, F_DIST, F_REFV, F_META):
+    for fn in (F_PLOT, F_TERRAIN, F_CLIM, F_DIST, F_REFV, F_META):
         p = os.path.join(OUT, fn)
         print(f"  {fn:<16}{os.path.getsize(p) / 1048576:6.2f} MB")
     print("地形占比:", ratio)
@@ -795,6 +869,10 @@ def main() -> int:
 
     payload = {
         "grid": meta["grid"], "terrain_legend": TERRAIN_LEGEND,
+        "climate_legend": {"heat": list(CL.HEAT_NAMES), "moist": list(CL.MOIST_NAMES),
+                           "encoding": "热量带 × 8 + 干湿（0..31）；干湿 = 0 读作寒带",
+                           "note": meta["climate_rule"]},
+        "display_classes": _disp_entries(),
         "plots": meta["plots"], "palette": pal,
         "domains": [{"g": g["geo"], "d": d} for g in pal for d in g["domains"]],
         "districts": districts,
