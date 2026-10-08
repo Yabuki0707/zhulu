@@ -1,1 +1,1 @@
-{"encoding": "cover-v2"}
+{"encoding": "cover-v3"}

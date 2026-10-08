@@ -72,6 +72,20 @@ def validate(meta, ledger):
                     f"真源当前 base_tag={cur_tag!r}。请重做（或先重跑 build_raster 再改）。")
 
     pid, bid = read_codes(png_p), read_codes(png_d)
+    # 分区编码.png 存的是**地块内的局部序号**（v3，见 docs/adr/0007）。校验一律在**全局 id**
+    # 上做，所以先把局部折回全局：键 = 地块×256 + 局部；地块号取自地块层**同一格**。
+    # 老草稿（v2 及以前）的 districts 没有 local，那时栅格里本来就是全局 id，按原样用。
+    districts = ledger.get("districts") or []
+    if any("local" in b for b in districts):
+        l2g = {}
+        for b in districts:
+            l2g[(int(b.get("plot") or 0) << 8) | int(b.get("local") or 0)] = int(b["id"])
+        bid = np.array([l2g.get((int(pp) << 8) | int(ll), 0)
+                        for pp, ll in zip(pid.ravel(), bid.ravel())],
+                       dtype=np.int32).reshape(pid.shape)
+        warns.append("分区层按 draft 台账的 (plot, local) 折回全局 id 后再校验")
+    else:
+        warns.append("草稿的 districts 没有 local 字段（v2 及以前的草稿）：把分区层当作全局 id 处理")
     if pid.shape != (H, W) or bid.shape != (H, W):
         errs.append(f"尺寸不符：草稿 {pid.shape[1]}×{pid.shape[0]}，真源 {W}×{H}")
         return errs, warns, {}
@@ -137,9 +151,18 @@ def validate(meta, ledger):
     return errs, warns, stats
 
 
+def _legend(meta) -> list:
+    """算 base_tag 用的图例摘要：**覆盖 + 形态**（与 build_raster.legend_tag 同一口径）；
+    旧台账（v2 及以前）没有 cover_legend，回退读 terrain_legend。"""
+    if "cover_legend" in meta:
+        return ([meta["cover_legend"][str(i)] for i in range(len(meta["cover_legend"]))]
+                + [meta["form_legend"][str(i)] for i in range(len(meta["form_legend"]))])
+    return [meta["terrain_legend"][str(i)] for i in range(len(meta["terrain_legend"]))]
+
+
 def _tag_of(meta) -> str:
     """真源台账里没有 base_tag 时按公式现算一个（老台账没存这个字段）。"""
-    legend = [meta["terrain_legend"][str(i)] for i in range(len(meta["terrain_legend"]))]
+    legend = _legend(meta)
     return make_base_tag(meta["grid"]["cell"], meta["grid"]["w"], meta["grid"]["h"],
                          len(meta["plots"]), meta["counts"]["covered_cells"],
                          [p["name"] for p in meta["plots"]], legend)
@@ -191,14 +214,23 @@ def main() -> int:
     print(f"  已备份到 {os.path.relpath(bdir, ROOT)}")
 
     # ---------------- 5. 写真源 ----------------
+    # 图例先算好再动文件：下面只要有一处抛错，真源就处在"PNG 换了、台账没换"的半写态
+    legend = _legend(meta)
     shutil.copy2(os.path.join(STAGING, F_PLOT), os.path.join(RASTER, F_PLOT))
     shutil.copy2(os.path.join(STAGING, F_DIST), os.path.join(RASTER, F_DIST))
-    legend = [meta["terrain_legend"][str(i)] for i in range(len(meta["terrain_legend"]))]
     plots = [{"id": int(p["id"]), "name": p["name"], "domain": p.get("domain") or ""}
              for p in sorted(ledger["plots"], key=lambda x: int(x["id"]))]
-    districts = [{"id": int(b["id"]), "name": b["name"], "plot": int(b.get("plot") or 0)}
-                 for b in sorted(ledger["districts"], key=lambda x: int(x["id"]))
-                 if int(b["id"]) not in set(stats["empty_blocks"])]
+    # 编号规则：全局 id 照抄草稿；**局部序号**由 (plot, 草稿内顺序) 重发一遍——
+    # 与 build_raster 同一条约定：局部序号是"地块内的第几个"，栅格读它、台账写全局 id。
+    _loc = {}
+    districts = []
+    for b in sorted(ledger["districts"], key=lambda x: int(x["id"])):
+        if int(b["id"]) in set(stats["empty_blocks"]):
+            continue
+        _pl = int(b.get("plot") or 0)
+        _loc[_pl] = _loc.get(_pl, 0) + 1
+        districts.append({"id": int(b["id"]), "name": b["name"], "plot": _pl,
+                          "local": int(b.get("local") or _loc[_pl])})
     meta["plots"], meta["districts"] = plots, districts
     meta["counts"]["plots"] = len(plots)
     meta["counts"]["covered_cells"] = stats["covered"]
@@ -213,8 +245,17 @@ def main() -> int:
     # ---------------- 6. 重生成 data.js（与 build_raster 同一写入口） ----------------
     from build_editor import load_palette
     pal = load_palette()
+    # v2/v3 的新键必须**原样带过去**：data.js 是编辑器唯一的入口，漏一个键
+    # 编辑器就会在启动时炸（cover_legend 缺失 → COVER_NAMES undefined）。
+    import display_class as DC                                          # noqa: E402
+    import climate as CL                                                # noqa: E402
     payload = {
-        "grid": meta["grid"], "terrain_legend": legend,
+        "grid": meta["grid"],
+        "cover_legend": meta.get("cover_legend"), "form_legend": meta.get("form_legend"),
+        "display_classes": DC.entries(),
+        "climate_legend": {"heat": list(CL.HEAT_NAMES), "moist": list(CL.MOIST_NAMES),
+                           "encoding": "热量带 × 8 + 干湿（0..31）；干湿 = 0 读作寒带",
+                           "note": meta.get("climate_rule", "")},
         "plots": [dict({"id": p["id"], "name": p["name"]},
                        **({"domain": p["domain"]} if p["domain"] else {})) for p in plots],
         "palette": pal,

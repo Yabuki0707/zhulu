@@ -9,7 +9,7 @@
 公式：
 
     name_tag   = "zh" + sha1(地块名按 id 升序以 "|" 连接)[:6]
-    legend_tag = "t"  + sha1(LEGEND 以 "|" 连接)[:4]
+    legend_tag = "t"  + sha1(LEGEND 以 "|" 连接)[:4]      # v3 起 LEGEND = 覆盖名 + 形态名
     base_tag   = f"{cell}-{W}x{H}-{地块数}-{有像元的地块覆盖的格数}-{name_tag}-{legend_tag}"
 
 - `地块数` 取**台账里的地块数**，不是种子数：编辑器会新建地块，数量不再等于种子数。

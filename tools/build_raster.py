@@ -22,7 +22,7 @@
 输出（地图/地图数据/栅格/）：
   地块编码.png   24 位 RGB，R + G*256 = 地块编码（0 = 无地块）—— 与 P社 province.bmp 同法
   分区编码.png   同上，0 = 无块区；块区隶属于地块 —— 初始全空，由编辑器绘制
-  地形编码.png   8 位灰度，值 = 16 类地形编码（见 tools/terrain.py 的 LEGEND）
+  地形编码.png   8 位灰度 = 覆盖(高 4 位) × 16 + 形态(低 4 位)；见 docs/adr/0007
   参考顶点.bin   **矢量顶点**（现代单元边界 + 唐 741 州面）—— 参考层不再是栅格掩膜
   台账.json      网格几何 / 地形图例 / 陆地口径 / 沙漠判据 / 地块台账
   高程/起伏/植被/气候/水体_降采样.npy   中间层（改分类规则时不必重读原图）
@@ -60,6 +60,7 @@ from mapdata import (ROOT, under, UNITS as UNITS_JSON, RASTER, NE_DIR,      # no
                      SCOPE_LON0, SCOPE_LON1, SCOPE_LAT0, SCOPE_LAT1)
 import terrain as TR                                                    # noqa: E402
 import climate as CL                                                    # noqa: E402
+import display_class as DC                                              # noqa: E402
 import rivers as RV                                                     # noqa: E402
 from refvec import build_ref_vector                                     # noqa: E402
 from basetag import base_tag as make_base_tag                           # noqa: E402
@@ -87,29 +88,42 @@ F_WATER = "水体_降采样.npy"
 LON0, LON1 = SCOPE_LON0, SCOPE_LON1
 LAT0, LAT1 = SCOPE_LAT0, SCOPE_LAT1
 
-TERRAIN_LEGEND = TR.LEGEND
-(T_OCEAN, T_LAKE, T_RIVER, T_ICE, T_FOREST, T_GRASS, T_WASTE, T_MARSH, T_TIDAL, T_OASIS,
- T_PLAIN, T_HILL, T_PLATEAU, T_MOUNTAIN) = range(len(TERRAIN_LEGEND))
+TERRAIN_LEGEND = TR.COVER_LEGEND      # v3：地形字节的**高 4 位**是「覆盖」（12 值）
+FORM_LEGEND = TR.FORM_LEGEND          # 低 4 位是「形态」（4 值，海洋格写 0 当 don't-care）
+(T_OCEAN, T_LAKE, T_RIVER, T_ICE, T_FOREST, T_GRASS, T_WASTE, T_MARSH, T_TIDAL, T_SALTM,
+ T_FARM, T_OASIS) = range(len(TERRAIN_LEGEND))
+(F_PLAIN, F_HILL, F_PLATEAU, F_MOUNTAIN) = range(len(FORM_LEGEND))
+# ⚠️ 本文件里那个叫 `terrain` 的数组，v3 起指的是**覆盖那一轴**（不含形态）；形态在 `form`
+# 里，两者**只在落盘时**用 `TR.pack()` 合进一个字节。名字没改，是为了让河流那一段
+# （烧伤/封缝/对角/去散点/收口）一行都不用动——它们本来只管"这是不是水"。
 
 
-def assert_contract(terrain, plot_id, districts, heat, moist, klim, lat, land, log=print):
-    """四条数据契约断言（`docs/adr/0006`）。**红一条就抛，不许静默落盘。**
+def assert_contract(terrain, form, plot_id, districts, heat, moist, klim, lat, land, log=print):
+    """数据契约断言（`docs/adr/0006` + `0007`）。**红一条就抛，不许静默落盘。**
 
-    为什么值得为它们开一个函数：v2 把地形压到 4 位、地块压到 14 位、块区压到 8 位局部码，
-    余量都不大；而"余量用尽"这件事一旦发生，后果是**静默截断**（溢出回绕写进 PNG，图上
-    看不出是哪一格坏了）。所以宁可让管线在最后一步红掉。
+    为什么值得为它们开一个函数：v3 把覆盖压到 4 位、形态压到 4 位、地块压到 **13** 位、
+    块区压到 8 位局部码，余量都不大；而"余量用尽"这件事一旦发生，后果是**静默截断**
+    （溢出回绕写进 PNG，图上根本看不出是哪一格坏了）。所以宁可让管线在最后一步红掉。
 
-    第 4 条最隐蔽：干湿码 0 同时表示「寒带」与「无气候数据」，于是数据空洞会被读成寒带。
-    **它第一次上线就把这条拦下来了**：原先以为那些洞都在极地（只看过纬度最高的 3 格就写了
-    "实测全在 81.7–81.8°N"），实测 11,352 格里有阿拉斯加、波罗的海、堪察加，纬度最低到
-    9.4°N——柯本把水体与冰盖 mask 成 nodata，而 NE 说那是陆。修法是 `CL.fill_land_nodata`
-    先把洞补上，这条断言则守着它不再长回来。
+    第 5 条（无气候洞）最隐蔽：干湿码 0 同时表示「寒带」与「无气候数据」，空洞会被读成
+    寒带。**它第一次上线就把这条拦下来了**：原先以为那些洞都在极地（只看过纬度最高的 3 格
+    就写了"实测全在 81.7–81.8°N"），实测 11,352 格里有阿拉斯加、波罗的海、堪察加，
+    纬度最低到 9.4°N——柯本把水体与冰盖 mask 成 nodata，而 NE 说那是陆。修法是
+    `CL.fill_land_nodata` 补洞，这条断言守着它不再长回来。
+
+    第 6 条（显示类覆盖全组合）是 v3 新加的：拆成两轴之后，`(覆盖, 形态)` 的组合数从 14
+    涨到 12×5，**规则表漏一个组合**的后果是编辑器里显示 "地形 undefined"（v1 真的发生过：
+    调色板里存了下标而不是颜色串）。
     """
     bad = []
-    if int(terrain.max()) > 15:
-        bad.append(f"覆盖类最大 {int(terrain.max())} > 15（4 位装不下）")
-    if int(plot_id.max()) > 16383:
-        bad.append(f"地块编号最大 {int(plot_id.max())} > 16,383（14 位装不下）")
+    if int(terrain.max()) >= 1 << 4:
+        bad.append(f"覆盖码最大 {int(terrain.max())} ≥ 16（高 4 位装不下）")
+    if form is not None and int(form.max()) >= 1 << 4:
+        bad.append(f"形态码最大 {int(form.max())} ≥ 16（低 4 位装不下）")
+    if form is not None and int(form[terrain == T_OCEAN].max(initial=0)) != 0:
+        bad.append("海洋格的形态位不是 0（海洋没有形状可言）")
+    if int(plot_id.max()) > 8191:
+        bad.append(f"地块编号最大 {int(plot_id.max())} > 8,191（13 位装不下）")
     if heat is not None and int(heat.max()) > 3:
         bad.append(f"热量带最大 {int(heat.max())} > 3（2 位装不下）")
     if moist is not None and int(moist.max()) > 7:
@@ -125,8 +139,20 @@ def assert_contract(terrain, plot_id, districts, heat, moist, klim, lat, land, l
         if n:
             bad.append(f"陆地上还有 {n} 格无气候数据（最小 |纬度| {minlat:.1f}°）——"
                        f"干湿码 0 会把它静默读成「寒带」；先补洞（CL.fill_land_nodata）")
-    log(f"  契约断言：覆盖 ≤15 ✓  地块 ≤16,383 ✓  热量带 ≤3 / 干湿 ≤7 ✓  "
-        f"每地块块区 ≤255（实测最多 {worst}）✓  陆地无气候洞 ✓")
+    if form is not None:
+        cv = np.unique(terrain)
+        fv = np.unique(form)
+        miss = DC.missing(cv, fv, log=log)
+        if miss:
+            bad.append(f"显示类规则表漏了 {miss} 个 (覆盖, 形态) 组合")
+        if heat is not None and moist is not None:
+            dead = DC.rule_hits(terrain, form, heat, moist, log=log)
+            if dead:
+                bad.append(f"显示类有 {len(dead)} 条规则从未命中（被前面的通配规则吃掉）："
+                           + "、".join(dict.fromkeys(dead)))
+    log(f"  契约断言：覆盖 <12 ✓  形态 <4 ✓  海洋形态=0 ✓  地块 ≤8,191 ✓  "
+        f"热量带 ≤3 / 干湿 ≤7 ✓  每地块块区 ≤255（实测最多 {worst}）✓  "
+        f"陆地无气候洞 ✓  显示类覆盖全组合 ✓")
     assert not bad, "数据契约被破坏：\n  · " + "\n  · ".join(bad)
 
 
@@ -382,7 +408,61 @@ def name_tag(seeds) -> str:
 
 
 def legend_tag() -> str:
-    return _bt_legend_tag(TERRAIN_LEGEND)
+    """图例摘要：**覆盖与形态都要进**——只改形态同样会让旧草稿失效。"""
+    return _bt_legend_tag(list(TERRAIN_LEGEND) + list(FORM_LEGEND))
+
+
+# ---------------------------------------------------------------- 运行态转储（v3 新增）
+
+def write_runtime(cover, form, plot_id, dist_local, heat, moist, W, H, cell, out_dir, log=print):
+    """把四层打包成**一条 32 位记录**，zlib 落成一件给游戏加载的文件。
+
+    契约（`docs/adr/0007`）：
+
+        位 31..28  覆盖 4      位 27..26  形态 2
+        位 25..24  热量带 2    位 23..21  干湿 3
+        位 20..8   地块 13     位 7..0    块区局部 8
+        = 32 位整 → 一个 `Uint32Array` 装完
+
+    地理区（8 位）**将来单独一个 `Uint8Array`**，不进这条记录：它是叠在行政图上的另一类
+    信息，不该挤占"每格一条"的热路径。
+
+    为什么值得落这一件：真源那几张 PNG 是给人看、给人单层改的（合计约 0.12 B/格）；而游戏
+    要的是"一次随机访问拿到全部字段"。实测原始数组 zlib 压一遍只有约 1 MiB——**比那几张
+    PNG 加起来还小**，解出来直接就是数组，不用 canvas、不用调色板。
+    """
+    import zlib
+    z = np.zeros_like(plot_id)
+    heat = z if heat is None else heat
+    moist = z if moist is None else moist
+    rec = ((cover.astype(np.uint32) << 28) | (form.astype(np.uint32) << 26)
+           | (heat.astype(np.uint32) << 24) | (moist.astype(np.uint32) << 21)
+           | (plot_id.astype(np.uint32) << 8) | dist_local.astype(np.uint32))
+    hdr = json.dumps({"magic": "ZLRB1", "w": int(W), "h": int(H), "cell": float(cell),
+                      "layout": "cover4|form2|heat2|moist3|plot13|block8",
+                      "region": "地理区将来单独一个 Uint8 数组（尚未建）"},
+                     ensure_ascii=False).encode("utf-8")
+    blob = len(hdr).to_bytes(4, "little") + hdr + zlib.compress(rec.tobytes(), 9)
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "底图.bin")
+    with open(path, "wb") as f:
+        f.write(blob)
+    log(f"  运行态 底图.bin：{len(blob) / 1048576:.2f} MiB"
+        f"（解出来 {rec.nbytes / 1048576:.1f} MiB 的 Uint32Array / "
+        f"每格 4 B；原始压到 {len(blob) / rec.nbytes * 100:.1f}%）")
+    return path
+
+
+def read_runtime(path):
+    """读回运行态转储 → (cover, form, heat, moist, plot_id, block_local)。给测试与游戏用。"""
+    import zlib
+    with open(path, "rb") as f:
+        n = int.from_bytes(f.read(4), "little")
+        json.loads(f.read(n).decode("utf-8"))
+        rec = np.frombuffer(zlib.decompress(f.read()), np.uint32)
+    return ((rec >> 28) & 0x0F, (rec >> 26) & 0x03, (rec >> 24) & 0x03, (rec >> 21) & 0x07,
+            (rec >> 8) & 0x1FFF, rec & 0xFF)
+
 
 
 # ---------------------------------------------------------------- 唐 741 州面（参考层用）
@@ -516,25 +596,42 @@ def main() -> int:
     #     每个地块 1 个占满它的块区，保证"每个地块都有块区"。
     #     ⚠️ 世界的**真**块区底稿要等 GADM L2 的中文名补齐（18,232 个单元，现在只有约一半
     #     有中文名，灌进去会满屏罗马字）—— 数据已下，见 TODO。
-    # 编号：按单元下标顺序给"有像元的单元"发连续编号，这样台账读起来是稳定的。
+    # 编号：**全局 id 按单元下标顺序发**（台账读起来稳定），另发一个**地块内的局部序号**
+    # 写进栅格——块区与地块的像元出自同一次 `contains_xy`，局部序号既省位（8 位够，
+    # 实测每地块最多 32 个），又让"块区必落在其声明地块内"从校验变成构造保证。
+    # 全局 id 由台账的 `(plot, local)` 确定性重算（编辑器解码时做这一步），
+    # 所以 分区编码.png 用 8 位灰度就装得下，不必再上 R+G×256 那套。
     present = np.unique(tmp_dist)
     present = present[present > 0]
     blk_lut = np.zeros(len(units) + 1, dtype=np.uint16)
     districts = []
+    seen = {}
     for n, ui in enumerate(present, 1):
         blk_lut[int(ui)] = n
+        plot = units[int(ui) - 1]["sp"] + 1
+        loc = seen.get(plot, 0) + 1
+        seen[plot] = loc
         districts.append({"id": n, "name": units[int(ui) - 1]["n"],
-                          "plot": units[int(ui) - 1]["sp"] + 1})
+                          "plot": plot, "local": loc})
     dist_id = blk_lut[tmp_dist]
+    local_of = np.zeros(len(districts) + 1, np.uint8)
+    for dd in districts:
+        local_of[dd["id"]] = dd["local"]
+    dist_local = local_of[dist_id]
     del tmp_dist
     nogap = int(((plot_id > 0) & (dist_id == 0)).sum())
     print(f"  块区底稿 {len(districts):,} 个（中华＝县；世界＝每地块 1 个占位）"
-          f"；有地块却没块区的像元 {nogap}（必须为 0）")
+          f"；有地块却没块区的像元 {nogap}（必须为 0）"
+          f"；栅格里的**局部序号** 1..{int(dist_local.max())}")
     assert nogap == 0, "块区必须覆盖每一个有地块的像元"
-    Image.fromarray(encode_id(dist_id), "RGB").save(os.path.join(OUT, F_DIST), optimize=True)
+    # 分区编码.png = 8 位灰度，值 = **地块内的局部序号**（0 = 无块区）。
+    Image.fromarray(dist_local, "L").save(os.path.join(OUT, F_DIST), optimize=True)
 
-    # ---------------- 地形层（20 类） ----------------
+    # ---------------- 覆盖 × 形态（两个半字节） ----------------
+    # v3 起这里有两个数组：`terrain` 是**覆盖**（12 值），`form` 是**形态**（5 值）。
+    # 落盘时才 `TR.pack()` 合进一个字节（覆盖在高 4 位）——见 docs/adr/0007。
     terrain = np.full((H, W), T_OCEAN, dtype=np.uint8)
+    form = np.zeros((H, W), dtype=np.uint8)
     ratio = {}
     if not args.no_terrain:
         if os.path.exists(ETOPO):
@@ -556,13 +653,15 @@ def main() -> int:
                 water_path=os.path.join(OUT, F_WATER))
             if veg is not None:
                 share = float((veg != TR.VEG_UNKNOWN).mean())
-                show = ((T_GRASS, "草原"), (T_PLAIN, "农田聚落"), (TR.CAND_FOREST, "森林"),
+                show = ((T_GRASS, "草原"), (T_FARM, "农田聚落"), (TR.CAND_FOREST, "森林"),
                         (TR.CAND_BARE, "裸地"))
                 print(f"  覆盖层覆盖 {share * 100:.1f}% 像元（" +
                       "，".join(f"{nm} {int((veg == t).sum()):,}" for t, nm in show) + "）")
                 print(f"  水体占比层：≥{TR.WATER_PCT}% 的格 {int((water >= TR.WATER_PCT).sum()):,}"
                       f"（含海洋与湖泊；不是既有水面的碎水见下面「碎水补面」那行）")
-        terrain = TR.classify(elev, relief, veg, land)      # v2：不再要纬度（林型权重制已删）
+        # v3：classify 出**两张**——覆盖（高 4 位）与形态（低 4 位）。两轴谁也不吃谁，
+        # 于是"高原上的草原/农田"第一次存得下来（见 adr/0007）。
+        terrain, form = TR.classify(elev, relief, veg, land)
 
         # 柯本气候类 → 两个轴（热量带 × 干湿），并**出产品层** `气候编码.png`。
         # v1 这里只是中间层（判沙漠用），v2 升格为产品层：地形表把气候那一半交还给了它
@@ -697,25 +796,17 @@ def main() -> int:
             # 约 550 mm），用 ARID 就会把中国最著名的一片农田判成「绿洲」——`check_terrain`
             # 的华北平原那一条第一次跑就抓到了这个。改成"真沙漠气候"之后，留下的正是
             # 需要灌溉才种得活的地方：印度河下游、尼罗河、两河、塔里木南缘、河西走廊。
-            oasis = np.isin(klim, CL.DESERT) & (veg == T_PLAIN) & land.astype(bool)
+            oasis = np.isin(klim, CL.DESERT) & (veg == T_FARM) & land.astype(bool)
             terrain[oasis] = T_OASIS
             print(f"  荒漠（LC100 裸地 ∧ 柯本干旱 ∧ 海拔 < {WASTE_MAX_ELEV:.0f} m）："
                   f"{int(dry.sum()):,} 格")
-            print(f"  绿洲（LC100 可耕地 ∧ 柯本真沙漠 BWh/BWk）：{int(oasis.sum()):,} 格")
+            print(f"  绿洲（LC100 农田 ∧ 柯本真沙漠 BWh/BWk）：{int(oasis.sum()):,} 格")
         elif veg is not None:
             print("  ! 无柯本气候：荒漠/绿洲跳过（否则会把草原盖成荒漠）")
         burn(ne_features(NE_GLACIATED), T_ICE, "冰川")
         burn(ne_features(NE_LAKES), T_LAKE, "湖泊")
-        # 滩涂 = 贴海的潮滩（盐沼与光泥滩）。**放在河流之前**，是为了让这批格不参加
-        # 后面的「碎水补面」——否则它们会被点成假河（实测贴海的 LC100 湿地有 3,503 格）。
-        # 海洋口径用 `land == 0`（本管线唯一的海洋口径），不用 `terrain == 海洋`：
-        # 这时湖面刚烧完，里海/贝加尔那类内海还是陆地。
-        if veg is not None:
-            from scipy import ndimage as _nd
-            sea8 = _nd.binary_dilation(land == 0, np.ones((3, 3), bool))
-            tidal = land.astype(bool) & sea8 & (veg == T_MARSH)
-            terrain[tidal] = T_TIDAL
-            print(f"  滩涂（LC100 湿地 ∧ 8 邻接海洋）：{int(tidal.sum()):,} 格")
+        # ⚠️ 「盐沼 / 滩涂」**不在这里**判：它们必须等河流那一段跑完（否则会把河口
+        # 抢走），见下面 `cleanup_river_specks` 之后的那一段。
         was_lake = terrain == T_LAKE
         # 河流：**HydroRIVERS（主）+ Natural Earth（兜）取并集**。
         # 为什么换：NE 的河流层全库 1,473 个要素，长江入海段（江阴→崇明，约 230 km）
@@ -723,7 +814,7 @@ def main() -> int:
         # 那是**覆盖度**问题，缩小像元救不了：空的地方再细也是空的。
         # HydroRIVERS 光亚洲片就 1,428,959 条河段，上下游共用节点，天然接得上。
         # NE 留着兜非洲/阿拉伯/美洲（本管线只下了四片 HydroRIVERS，见 rivers.REGIONS）。
-        before_rivers = terrain.copy()          # 去散点时还原用（16 类，7.4 MB，便宜）
+        before_rivers = terrain.copy()          # 去散点时还原用（覆盖 12 类，9.4 MB，便宜）
         hr_files = [hydro_rivers(z) for z in RV.REGIONS]
         if any(os.path.exists(p) for p in hr_files):
             RV.burn_hydrorivers(terrain, T_RIVER, cell, LON0, LAT1, hr_files,
@@ -742,17 +833,22 @@ def main() -> int:
         if water is not None:
             from scipy import ndimage
             is_water = np.isin(terrain, (T_OCEAN, T_LAKE, T_RIVER))
-            # 滩涂不参加补面：它本来就是"贴海的湿格"，补进来只会变成假河（见上面滩涂那行）。
-            cand = (water >= TR.WATER_PCT) & ~is_water & (terrain != T_TIDAL)
+            # **只灌"离真河 ≤3 格"的碎水格**（v3 收紧）。原先的条件是"与任何水面 4 邻接"，
+            # 海也算——于是整条海岸线被镶了一圈假河、小岛整块变河（实测补出 23,166 格里
+            # 16,105 格 8 邻接海洋、13,907 格 LC100 明说那是开阔海）。改成按到真河的**距离**
+            # 之后：三角洲与河口照样连通（它们本来就紧贴河道），海岸光晕消失——那批格改判
+            # 「盐沼/滩涂」（见下面那一段）。
+            near_riv = ndimage.distance_transform_edt(terrain != T_RIVER) <= 3.5
+            cand = (water >= TR.WATER_PCT) & ~is_water & near_riv
             if cand.any():
-                seed = is_water | cand                       # 一起连通，才知道谁挨着水
+                seed = is_water | cand
                 lab = ndimage.label(seed, structure=np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))[0]
-                keep = np.unique(lab[is_water & (lab > 0)])  # 含既有水的块的编号
+                keep = np.unique(lab[is_water & (lab > 0)])
                 fill = cand & np.isin(lab, keep)
                 terrain[fill] = T_RIVER
-                print(f"  碎水补面：占比 ≥{TR.WATER_PCT}% 的格 {int(cand.sum()):,}，"
+                print(f"  碎水补面：占比 ≥{TR.WATER_PCT}% 且离真河 ≤3 格的 {int(cand.sum()):,}，"
                       f"其中与水面相连的 {int(fill.sum()):,} 补成河流"
-                      f"（河口/三角洲/辫状河；不相连的是滩涂水田，不动）")
+                      f"（河口/三角洲/辫状河；离河远的海岸湿格归盐沼/滩涂）")
         # **湖面赢**：河网里有"湖心线"（HydROSHEDS/NE 都把水流路径画过湖），那是流向记录
         # 不是地表河。让它盖掉湖面，贝加尔湖心就成了一条河（check_terrain 抓到了）。
         # 河穿湖本来就是河→湖→河，颜色一变不是"断"。
@@ -768,6 +864,23 @@ def main() -> int:
         connect_diagonal_rivers(terrain, T_RIVER, log=print)
         # 去散点放在**湖面还原之后**：还原会把河段切碎，先清会留下新的小段（实测 880 个孤点）。
         cleanup_river_specks(terrain, before_rivers, T_RIVER, RIVER_MIN_CELLS, log=print)
+
+        # **盐沼 / 滩涂**（v3 新增。**放在河流之后**：先让河流拿走河口与三角洲，
+        # 剩下的沿海湿格才是潮滩——顺序反了就会把河口抢走，长江口那样）。
+        # 两者都是湿地，差别只在**有没有植被**，而这在 LC100 里是分得开的：
+        #   · 草本湿地（码 90）贴海 = 有植被 → **盐沼**（碱蓬/芦苇/米草那一类）
+        #   · 格内水占比 ≥30% 的光泥滩  → **滩涂**
+        if veg is not None and water is not None:
+            from scipy import ndimage as _nd
+            sea8 = _nd.binary_dilation(land == 0, np.ones((3, 3), bool))
+            beach = land.astype(bool) & sea8
+            saltm = beach & (veg == T_MARSH)
+            terrain[saltm] = T_SALTM
+            mud = (beach & (water >= TR.WATER_PCT) & (terrain != T_SALTM)
+                   & ~np.isin(terrain, (T_OCEAN, T_LAKE, T_RIVER)))
+            terrain[mud] = T_TIDAL
+            print(f"  盐沼（LC100 草本湿地 ∧ 贴海，有植被）：{int(saltm.sum()):,} 格")
+            print(f"  滩涂（格内水占比 ≥{TR.WATER_PCT}% ∧ 贴海，光泥滩）：{int(mud.sum()):,} 格")
     # 海洋口径收口：陆地掩膜的补集。**但河线穿过的格子不算海** —— 长江江阴以下的入海段
     # 在 NE 陆地面与 LC100 里都是 200（开阔海），若一律按掩膜收口，刚补上的入海段会被
     # 重新抹成海洋，等于白换数据源。判据只看 `terrain == T_RIVER`（只有河烧伤它），
@@ -778,11 +891,12 @@ def main() -> int:
     # （实测：里海/贝加尔/鄱阳/青海湖/死海/五大湖 = 80；渤海/黄海/南海/地中海/红海/日本海 = 200），
     # 所以直接采信它：被算成海、但 LC100 说是"内陆水体"的格子，改记湖泊。
     if veg is not None:
-        inland = (terrain == T_OCEAN) & (veg == TR.T_LAKE)
+        inland = (terrain == T_OCEAN) & (veg == TR.C_LAKE)
         if inland.any():
             terrain[inland] = T_LAKE
             print(f"  内海/大湖：{int(inland.sum())} 格由海洋改记湖泊（LC100 内陆水体）")
-    Image.fromarray(terrain, "L").save(os.path.join(OUT, F_TERRAIN), optimize=True)
+    Image.fromarray(TR.pack(terrain, form), "L").save(os.path.join(OUT, F_TERRAIN),
+                                                     optimize=True)
 
     # ---------------- 参考层：矢量顶点（不再是栅格掩膜） ----------------
     tang = tang_rings(cell)
@@ -791,10 +905,15 @@ def main() -> int:
     counts = np.bincount(terrain.ravel(), minlength=len(TERRAIN_LEGEND))
     ratio = {TERRAIN_LEGEND[i]: round(int(c) / terrain.size, 4)
              for i, c in enumerate(counts) if c}
+    fcounts = np.bincount(form.ravel(), minlength=len(FORM_LEGEND))
+    form_ratio = {FORM_LEGEND[i]: round(int(c) / form.size, 4)
+                  for i, c in enumerate(fcounts) if c}
     # **数据契约断言**放在落盘之前（ADR 0006）：4 位覆盖、14 位地块、8 位块区局部码，
     # 余量都不大，而"余量用尽"的后果是静默截断——宁可让管线在这一步红掉。
     from display_class import entries as _disp_entries, note as _disp_note
-    assert_contract(terrain, plot_id, districts, heat, moist, klim, LAT, land, log=print)
+    assert_contract(terrain, form, plot_id, districts, heat, moist, klim, LAT, land, log=print)
+    write_runtime(terrain, form, plot_id, dist_local, heat, moist, W, H, cell,
+                  os.path.join(os.path.dirname(OUT), "运行态"), log=print)
     # 底图指纹：写进台账，也写进 data.js。import_editor 要靠它判断草稿是否基于旧底图
     # （工单 §3.3、§4.2 第 2 步），所以必须在 meta 落盘**之前**算出来。
     base_tag = make_base_tag(cell, W, H, len(seeds), covered,
@@ -803,11 +922,13 @@ def main() -> int:
         "grid": {"lon0": LON0, "lon1": LON1, "lat0": LAT0, "lat1": LAT1, "cell": cell,
                  "w": W, "h": H,
                  "note": "经度折回连续（>180 为日界线以东）；行序自北向南"},
-        "terrain_legend": {str(i): n for i, n in enumerate(TERRAIN_LEGEND)},
-        "terrain_ratio": ratio,
+        "cover_legend": {str(i): n for i, n in enumerate(TERRAIN_LEGEND)},
+        "form_legend": {str(i): n for i, n in enumerate(FORM_LEGEND)},
+        "cover_ratio": ratio,
+        "form_ratio": form_ratio,
         "plot_id_encoding": "R + G*256（0 = 无地块）",
-        "dist_id_encoding": "R + G*256（0 = 无块区；块区隶属于地块）",
-        "terrain_encoding": "8 位灰度，值 = terrain_legend 的下标（**14 类**：水冰 4 + 覆盖 6 + 形态 4）",
+        "dist_id_encoding": "8 位灰度 = **地块内的局部序号**（0 = 无块区）；全局块区 id 见台账 districts 的 (plot, local)",
+        "terrain_encoding": "8 位灰度 = 覆盖（高 4 位）× 16 + 形态（低 4 位）；解包见 tools/terrain.py 的 unpack（docs/adr/0007）",
         "land_rule": "陆地 = Natural Earth 10m 陆地 ∪ 湖泊 ∪ 冰川区（格心命中）；"
                      "地形层的「海洋」是该掩膜的补集，地块层也被它裁过",
         "cover_rule": "覆盖 = LC100 土地覆盖（森林/草原/平原）＋ 由气候与海岸判出的三类："
@@ -868,7 +989,7 @@ def main() -> int:
         print(f"  已删除编辑器副本 {os.path.relpath(old_copy, ROOT)}（真源唯一，见 docs/adr/0002）")
 
     payload = {
-        "grid": meta["grid"], "terrain_legend": TERRAIN_LEGEND,
+        "grid": meta["grid"], "cover_legend": TERRAIN_LEGEND, "form_legend": FORM_LEGEND,
         "climate_legend": {"heat": list(CL.HEAT_NAMES), "moist": list(CL.MOIST_NAMES),
                            "encoding": "热量带 × 8 + 干湿（0..31）；干湿 = 0 读作寒带",
                            "note": meta["climate_rule"]},

@@ -1,19 +1,25 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""抽查生成出来的底图，两条硬检查 + 一组地理常识断言。
+"""抽查生成出来的底图：三条硬检查 + 一组地理常识断言。
 
     python tools/check_terrain.py            # 读 地图/地图数据/栅格/ 下的产物
-    python tools/check_terrain.py --all      # 另外打印每类的占比与零像元地块清单
+    python tools/check_terrain.py --all      # 另外打印占比与零像元地块清单
 
 硬检查（任一不过 → 退出码 1）：
 
-  1. **地块不压海洋**：`地形 == 海洋` 的像元上，`地块编码` 必须全部为 0。
+  1. **地块不压海洋**：`覆盖 == 海洋` 的像元上，`地块编码` 必须全部为 0。
      这是需求方定的规矩，也是"海陆口径只有一处"的直接推论。
-  2. **地形编码在图例范围内**，且没有从未出现过的类（那说明分类规则有死类）。
+  2. **地形字节在契约内**：高 4 位覆盖 < 12、低 4 位形态 < 5，且**海洋格的形态位必须是 0**。
+  3. **气候层在位**：`气候编码.png` 存在、形状一致、码 ≤ 31。
 
-地理常识断言：一组已知地点，看落到的类是否在"可接受集"里。这些点是拿地图对着写的，
-不追求全对（同一地点不同资料会归不同类），只用来抓住"整片错"这种事——
-比如西伯利亚不是针叶林、撒哈拉不是沙漠、青藏不是高原，那就一定是分类塌了。
+地理常识断言：一组已知地点，看**覆盖**落在不在"可接受集"里，并顺手打印该格的
+**显示类**（覆盖 × 形态 × 气候，是玩家真正看到的名字）。这些点是拿地图对着写的，不追求
+全对，只用来抓住"整片错"这种事 —— 比如西宁不是农田、西伯利亚不是森林、青藏不是高原。
+
+⚠️ v3 起底图里**没有**沙漠/裸地/针叶林/阔叶林/雨林/苔原这些名字（`docs/adr/0006`、`0007`）：
+它们是显示类，由「覆盖 × 形态 × 气候」当场派生。所以这里断言的是**覆盖**（撒哈拉/塔克拉玛干
+断的是「荒漠」，西伯利亚断的是「森林」），而"沙漠/针叶林"这些名字只出现在打印出来的
+显示类那一列里。
 """
 from __future__ import annotations
 
@@ -29,56 +35,57 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mapdata import GRID_META, GRID_PLOT, GRID_TERRAIN, under      # noqa: E402
 import terrain as TR                                              # noqa: E402
 import climate as CL                                              # noqa: E402
+import display_class as DC                                        # noqa: E402
 
-# (名称, 经度, 纬度, 可接受的**覆盖/形态类**)。经度是**连续窗口** 25–226（>180 是日界线
-# 以东），落在窗口外的点直接跳过 —— 早期脚本用 `% W` 回绕，把 15°E 的撒哈拉点算到了
-# 太平洋上。
-#
-# ⚠️ v2 起底图里**没有**沙漠/裸地/针叶林/阔叶林/雨林/苔原这些名字了（ADR 0006）：
-# 它们成了显示类，由「覆盖 × 气候」当场派生。所以这里断言的是**存储类**——
-# 撒哈拉/塔克拉玛干断的是「荒漠」（沙漠 = 荒漠 ∧ 干旱，在显示层才叫沙漠），
-# 西伯利亚断的是「森林」（针叶 = 森林 ∧ 亚寒带，同样在显示层才分开）。
+C = TR.COVER_LEGEND
+
+# (名称, 经度, 纬度, 可接受的**覆盖**集, 可接受的**形态**集或 None)
+# 经度是**连续窗口** 25–226（>180 是日界线以东），落在窗口外的点直接跳过 ——
+# 早期脚本用 `% W` 回绕，把 15°E 的撒哈拉点算到了太平洋上。
 EXPECT = [
-    # —— 覆盖：荒漠（= 原「沙漠/裸地」在存储层的合并体）——
-    ("埃及南部", 30.0, 25.0, {"荒漠"}),
-    ("鲁卜哈利", 48.0, 21.0, {"荒漠"}),
-    ("塔克拉玛干", 82.0, 39.0, {"荒漠"}),
-    ("戈壁", 105.0, 43.0, {"荒漠", "高原"}),
-    ("澳洲中部", 133.0, -25.0, {"荒漠", "草原"}),
-    # —— 覆盖：绿洲（干旱区里的可耕地）——
-    ("和田绿洲", 79.9, 37.1, {"绿洲", "荒漠", "山地"}),
-    ("尼罗河三角洲", 31.0, 30.8, {"绿洲", "平原", "湖泊", "荒漠"}),
-    ("两河下游", 46.0, 31.0, {"绿洲", "荒漠", "沼泽"}),
+    # —— 覆盖：荒漠（= 干旱区的裸露与稀疏植被）——
+    ("埃及南部", 30.0, 25.0, {"荒漠"}, None),
+    ("鲁卜哈利", 48.0, 21.0, {"荒漠"}, None),
+    ("塔克拉玛干", 82.0, 39.0, {"荒漠"}, None),
+    ("戈壁", 105.0, 43.0, {"荒漠", "草原"}, None),
+    ("澳洲中部", 133.0, -25.0, {"荒漠", "草原"}, None),
+    # —— 覆盖：农田（真沙漠气候里就是「绿洲」，高原上就是「河谷农田」）——
+    ("和田绿洲", 79.9, 37.1, {"绿洲", "农田", "荒漠"}, None),
+    ("尼罗河三角洲", 31.0, 30.8, {"绿洲", "农田", "湖泊", "荒漠"}, None),
+    # —— **西北专项**（需求方报"河湟谷地没有、陇右整片高原"）——
+    ("西宁·河湟谷地", 101.78, 36.62, {"农田", "草原", "森林"}, {"高原", "丘陵", "山地"}),
+    ("天水·陇右", 105.72, 34.58, {"农田", "草原"}, {"高原", "丘陵", "山地"}),
+    ("定西·陇中", 104.63, 35.58, {"农田", "草原"}, None),
+    ("武威·河西", 102.64, 37.93, {"草原", "荒漠", "绿洲"}, None),
+    ("银川·宁夏", 106.23, 38.49, {"绿洲", "农田", "荒漠"}, None),
+    ("兰州", 103.83, 36.06, {"河流", "农田", "草原"}, None),
     # —— 形态：山地 / 高原（只看起伏与高程）——
-    ("青藏高原", 88.0, 33.0, {"高原"}),
-    ("喜马拉雅", 86.0, 28.0, {"山地", "冰川", "高原"}),
-    ("天山脊线", 84.5, 43.2, {"山地", "冰川", "高原", "荒漠"}),
-    ("蒙古高原", 105.0, 47.0, {"高原", "草原"}),
-    ("黄土高原", 108.5, 36.5, {"高原", "丘陵", "草原"}),
-    ("云贵高原", 104.0, 25.5, {"高原", "山地", "森林"}),
-    # —— 盆地/平原：**这是上一轮翻车的地方**（四川盆地曾被判成丘陵）——
-    ("四川盆地", 105.0, 30.5, {"平原", "丘陵"}),
-    ("华北平原", 116.0, 38.0, {"平原"}),
-    ("东北平原", 125.0, 45.0, {"平原"}),
-    ("恒河平原", 85.0, 25.0, {"平原", "河流"}),
+    ("青藏高原", 88.0, 33.0, {"草原", "荒漠", "冰川"}, {"高原", "山地"}),
+    # 喜马拉雅南坡 3547 m 那一格 LC100 说森林——**数据是对的**（远低于树线）。
+    # 拆开之后"森林"第一次能长在山上，见下面那个"树线以上只有 60 格"的旁注。
+    ("喜马拉雅", 86.0, 28.0, {"森林", "冰川", "草原", "荒漠"}, {"山地", "高原"}),
+    ("蒙古高原", 105.0, 47.0, {"草原", "荒漠"}, {"高原", "丘陵"}),
+    # 黄土高原上的「高原森林」是子午岭，真的（1558 m）。
+    ("黄土高原", 108.5, 36.5, {"森林", "草原", "农田", "荒漠"}, None),
+    # —— 盆地 / 平原 ——
+    ("四川盆地", 105.0, 30.5, {"农田", "森林"}, {"平原", "丘陵"}),
+    ("华北平原", 116.0, 38.0, {"农田"}, {"平原"}),
+    ("东北平原", 125.0, 45.0, {"农田", "草原"}, {"平原", "丘陵"}),
+    ("恒河平原", 85.0, 25.0, {"农田", "河流"}, None),
     # —— 覆盖：森林（针叶/阔叶/雨林在存储层已合一，只有显示层才按热量带分开）——
-    ("西伯利亚中部", 100.0, 60.0, {"森林"}),
-    ("大兴安岭", 122.0, 52.0, {"森林", "山地", "河流"}),
-    ("江南丘陵", 118.0, 29.0, {"森林", "丘陵", "平原"}),
-    ("日本本州", 138.0, 36.0, {"森林", "山地"}),
-    ("海南北部低地", 110.4, 19.9, {"森林", "平原", "河流"}),
-    ("加里曼丹", 114.0, 0.0, {"森林", "河流"}),
-    ("苏门答腊", 101.0, 0.0, {"森林"}),
-    ("吕宋中央平原", 120.9, 15.6, {"平原", "森林", "河流"}),
-    ("云南南部", 101.0, 22.0, {"森林"}),
-    # —— 水：内海必须是湖泊（里海曾在 LC100 的 200 上被写回「海洋」）——
-    ("里海", 51.0, 42.0, {"湖泊"}),
-    ("贝加尔湖", 108.0, 53.0, {"湖泊", "冰川"}),
-    ("渤海", 120.0, 38.0, {"海洋"}),
-    ("黄海", 124.0, 34.0, {"海洋"}),
-    ("太平洋中部", 160.0, 30.0, {"海洋"}),
-    ("印度洋", 80.0, -10.0, {"海洋"}),
-    ("南海", 115.0, 15.0, {"海洋"}),
+    ("西伯利亚中部", 100.0, 60.0, {"森林"}, None),
+    ("大兴安岭", 122.0, 52.0, {"森林", "草原"}, None),
+    ("江南丘陵", 118.0, 29.0, {"森林", "农田"}, None),
+    ("日本本州", 138.0, 36.0, {"森林", "农田"}, None),
+    ("加里曼丹", 114.0, 0.0, {"森林", "河流"}, None),
+    ("苏门答腊", 101.0, 0.0, {"森林"}, None),
+    # —— 水 ——
+    ("里海", 51.0, 42.0, {"湖泊"}, None),
+    ("贝加尔湖", 108.0, 53.0, {"湖泊", "冰川"}, None),
+    ("渤海", 120.0, 38.0, {"海洋"}, None),
+    ("黄海", 124.0, 34.0, {"海洋"}, None),
+    ("印度洋", 80.0, -10.0, {"海洋"}, None),
+    ("南海", 115.0, 15.0, {"海洋"}, None),
 ]
 
 
@@ -93,48 +100,54 @@ def main() -> int:
             return 1
     meta = json.load(open(GRID_META, encoding="utf-8"))
     g = meta["grid"]
-    legend = [meta["terrain_legend"][str(i)] for i in range(len(meta["terrain_legend"]))]
-    terrain = np.asarray(Image.open(GRID_TERRAIN))
+    cover_leg = [meta["cover_legend"][str(i)] for i in range(len(meta["cover_legend"]))]
+    form_leg = [meta["form_legend"][str(i)] for i in range(len(meta["form_legend"]))]
+    terr_byte = np.asarray(Image.open(GRID_TERRAIN))
+    cover, form = TR.unpack(terr_byte)
     rgb = np.asarray(Image.open(GRID_PLOT).convert("RGB")).astype(np.uint16)
     plot = rgb[..., 0] + (rgb[..., 1] << 8)
     W, H, cell, lon0, lat1 = g["w"], g["h"], g["cell"], g["lon0"], g["lat1"]
     print(f"栅格 {W} × {H}  格 {cell}° ≈ {cell * 111:.2f} km  "
           f"经度 {g['lon0']}–{g['lon1']}E  纬度 {g['lat0']}–{g['lat1']}N")
-    print(f"地形 {len(legend)} 类：" + " ".join(f"{i}{n}" for i, n in enumerate(legend)))
+    print(f"覆盖 {len(cover_leg)} 类：" + " ".join(f"{i}{n}" for i, n in enumerate(cover_leg)))
+    print(f"形态 {len(form_leg)} 类：" + " ".join(f"{i}{n}" for i, n in enumerate(form_leg)))
+    print(f"地形字节 = 覆盖×16 + 形态；实测最大 {int(terr_byte.max())}")
 
     bad = 0
     # ---- 硬检查 1：地块不压海洋 ----
-    sea = terrain == TR.T_OCEAN
+    sea = cover == TR.C_OCEAN
     n_sea_plot = int((sea & (plot > 0)).sum())
     n_land = int((~sea).sum())
-    n_land_noplot = int((~sea & (plot == 0)).sum())
     ok1 = n_sea_plot == 0
     print(f"\n[1] 地块不压海洋：海里带地块的像元 {n_sea_plot:,}  " + ("✓" if ok1 else "✗ 失败"))
-    print(f"    陆地 {n_land:,} 格（{n_land / terrain.size * 100:.1f}%），"
-          f"其中无地块 {n_land_noplot:,} 格（{n_land_noplot / max(1, n_land) * 100:.1f}%）"
-          f" —— 无地块的陆地就是欧/非/美洲＋未收录区，正常")
+    print(f"    陆地 {n_land:,} 格（{n_land / cover.size * 100:.1f}%），"
+          f"其中无地块 {int((~sea & (plot == 0)).sum()):,} 格 —— 那就是欧/非/美洲＋未收录区，正常")
     bad += 0 if ok1 else 1
 
-    # ---- 硬检查 2：编码范围 / 有无死类 ----
-    ids, cnt = np.unique(terrain, return_counts=True)
-    ok2 = ids.min() >= 0 and ids.max() < len(legend)
-    dead = [legend[i] for i in range(len(legend)) if i not in set(ids.tolist())]
-    print(f"\n[2] 地形编码范围 0–{int(ids.max())}（图例 {len(legend)} 类）："
+    # ---- 硬检查 2：字节契约（覆盖 <12、形态 <5、海洋形态 = 0） ----
+    ok2 = (int(cover.max()) < TR.N_COVER and int(form.max()) < TR.N_FORM
+           and int(form[sea].max(initial=0)) == 0)
+    print(f"\n[2] 地形字节：覆盖 0–{int(cover.max())}（<{TR.N_COVER}）、形态 0–{int(form.max())}"
+          f"（<{TR.N_FORM}）、海洋形态=0："
           + ("✓" if ok2 else "✗ 越界"))
+    if not ok2:
+        bad += 1
+    dead = [cover_leg[i] for i in range(TR.N_COVER)
+            if int((cover == i).sum()) == 0 and i != 0]
     if dead:
-        print(f"    ! 从未出现的类：{dead}（分类规则里是死类，检查是不是漏了映射）")
-    bad += 0 if ok2 else 1
+        print(f"    ! 从未出现的覆盖类：{dead}（分类规则里是死类，检查是不是漏了映射）")
 
     # ---- 硬检查 3：气候层（v2 起是产品层，不是中间层） ----
     klim_png = under("栅格", "气候编码.png")
     if not os.path.exists(klim_png):
-        print("\n[3] 气候编码.png 缺失 —— v2 起地形表把气候那一半交还给了它（ADR 0006）✗")
+        print("\n[3] 气候编码.png 缺失 —— 地形表把气候那一半交还给了它（ADR 0006）✗")
         bad += 1
+        kod = None
     else:
         kod = np.asarray(Image.open(klim_png))
-        ok3 = kod.shape == terrain.shape and int(kod.max()) <= 31
+        ok3 = kod.shape == cover.shape and int(kod.max()) <= 31
         heat, moist = CL.unpack(kod)
-        landm = terrain != TR.T_OCEAN
+        landm = ~sea
         n_polar = int((landm & (moist == 0)).sum())
         print(f"\n[3] 气候层：形状 {kod.shape}，码 0–{int(kod.max())}（上限 31）："
               + ("✓" if ok3 else "✗ 越界或形状不符"))
@@ -144,42 +157,52 @@ def main() -> int:
             f"{n} {int((landm & (moist == i)).sum()):,}"
             for i, n in enumerate(CL.MOIST_NAMES) if (landm & (moist == i)).any()))
         print(f"    干湿=0（读作寒带）的陆地 {n_polar:,} 格 = 陆地的 "
-              f"{n_polar / max(1, int(landm.sum())) * 100:.1f}%"
-              f"（柯本 ET/EF ＋ 北极那 11,380 格无气候数据）")
+              f"{n_polar / max(1, int(landm.sum())) * 100:.1f}%")
         bad += 0 if ok3 else 1
 
-    # ---- 地理常识断言 ----
-    print("\n[4] 已知地点抽查：")
+    # ---- 地理常识断言（打印**显示类**，那才是玩家看到的名字） ----
+    print("\n[4] 已知地点抽查（现 = 覆盖 ∧ 形态 → 显示类）：")
     fails = []
-    for name, lon, lat, want in EXPECT:
+    for name, lon, lat, want_c, want_f in EXPECT:
         x = int((lon - lon0) / cell)
         y = int((lat1 - lat) / cell)
         if not (0 <= x < W and 0 <= y < H):
-            print(f"    · {name:<12} ({lon:g},{lat:g}) 不在窗口（{lon0:g}–{lon0 + W * cell:g}E / "
-                  f"{lat1 - H * cell:g}–{lat1:g}N）内，跳过")
+            print(f"    · {name:<14} 不在窗口内，跳过")
             continue
-        got = legend[int(terrain[y, x])]
-        hit = got in want
+        cv, fm = int(cover[y, x]), int(form[y, x])
+        got_c, got_f = cover_leg[cv], form_leg[fm]
+        disp = (DC.label(cv, fm, int(heat[y, x]), int(moist[y, x]))
+                if kod is not None else "（无气候层）")
+        hit = got_c in want_c and (want_f is None or got_f in want_f)
         if not hit:
-            fails.append((name, lon, lat, got, want))
-        print(f"    {'OK ' if hit else 'BAD'} {name:<12} ({lon:>7.1f},{lat:>6.1f}) → {got:<6} "
-              f"期望 {'/'.join(sorted(want))}")
+            fails.append((name, lon, lat, got_c, got_f, disp, want_c, want_f))
+        print(f"    {'OK ' if hit else 'BAD'} {name:<14} ({lon:>7.1f},{lat:>6.1f}) → "
+              f"{got_c}∧{got_f} → {disp}")
     if fails:
-        print(f"    ✗ {len(fails)} 处不符：" + "；".join(f"{n} 得到{g}" for n, _, _, g, _ in fails))
+        print(f"    ✗ {len(fails)} 处不符："
+              + "；".join(f"{n} 得到{c}∧{f}→{d}" for n, _, _, c, f, d, _, _ in fails))
         bad += 1
 
     if args.all:
-        print("\n地形占比：")
-        for i, c in sorted(zip(ids.tolist(), cnt.tolist()), key=lambda t: -t[1]):
-            print(f"    {legend[i]:<8}{c / terrain.size * 100:7.3f}%  {c:,}")
+        print("\n覆盖占比：")
+        cc = np.bincount(cover.ravel(), minlength=TR.N_COVER)
+        for i in np.argsort(-cc):
+            if not cc[i]:
+                continue
+            print(f"    {cover_leg[i]:<6}{cc[i] / cover.size * 100:7.3f}%  {int(cc[i]):,}")
+        print("形态占比：")
+        fc = np.bincount(form.ravel(), minlength=TR.N_FORM)
+        for i in np.argsort(-fc):
+            if not fc[i]:
+                continue
+            print(f"    {form_leg[i]:<6}{fc[i] / form.size * 100:7.3f}%  {int(fc[i]):,}")
         pids, pcnt = np.unique(plot[plot > 0], return_counts=True)
         ledger = {p["id"] for p in meta["plots"]}
         blank = sorted(ledger - set(pids.tolist()))
         print(f"\n地块：台账 {len(ledger)}，栅格里出现 {len(pids)}，零像元 {len(blank)}")
-        if blank:
-            names = {p["id"]: p["name"] for p in meta["plots"]}
-            print("    零像元例：" + "，".join(f"{i} {names.get(i, '')}" for i in blank[:12]))
-        print(f"    最大地块编码 {int(pids.max())}（编码上限 65535，Uint16/R+G*256 同口径）")
+        print(f"    最大地块编码 {int(pids.max())}（编码上限 8,191，13 位同口径）")
+        print(f"    块区：台账 {len(meta['districts'])} 个，栅格里最大的**局部序号** "
+              f"{int(np.asarray(Image.open(under('栅格', '分区编码.png'))).max())}（上限 255）")
 
     print("\n" + ("全部通过 ✓" if bad == 0 else f"{bad} 项未通过 ✗"))
     return 0 if bad == 0 else 1

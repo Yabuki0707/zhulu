@@ -31,39 +31,38 @@ v1 用一套「纬度 + 海拔」连续权重把 LC100 的林型族判成雨林�
 针叶林）在气候看来是亚热带，会显示成常绿阔叶。实测面积极小，且换气候数据不必重做地形
 ——这正是这一层分离要买的东西。
 
-### 地形表（14 类；2026-10-08 契约 v2，见 docs/adr/0006）
+### 地形表（v3：**一个字节两个半字节**——高 4 位覆盖、低 4 位形态；见 docs/adr/0007）
 
-    0 海洋 1 湖泊 2 河流 3 冰川          ← 水冰
-    4 森林 5 草原 6 荒漠 7 沼泽 8 滩涂 9 绿洲   ← 覆盖
-    10 平原 11 丘陵 12 高原 13 山地       ← 形态
+    覆盖（高 4 位，12 值）  0海洋 1湖泊 2河流 3冰川 ｜ 4森林 5草原 6荒漠 7沼泽 8滩涂 9盐沼 10农田 11绿洲
+    形态（低 4 位， 4 值）  0平原 1丘陵 2高原 3山地（海洋格写 0 当 don't-care）
 
-相对 v1 的 16 类，**砍掉的都是气候，不是地形**：
+**为什么必须拆**（`docs/adr/0007`，需求方看图报的）：
 
-  · **针叶林 / 阔叶林 / 雨林 / 混交 → 一个「森林」**。林型的差别全在气候带上（雨林与泰加林
-    的区别不在"长着什么"，而在"长在哪个气候带"）。合并后**那套「纬度 + 海拔权重制」林型
-    判定整段删掉**（`_forest_label` / `climate_weights` / `FAM_AFFINITY`）——它的活改由
-    柯本热量带干，且改得更准：日本海侧雪国的阔叶林与西伯利亚的泰加林，柯本本来就分了带。
-    视觉不丢：编辑器按 `森林 × 热量带` 当场派生出四种绿（见 tools/display_class.py）。
-  · **沙漠 → 不存储**。它 = `荒漠 ∧ 干旱气候`，是本表与气候层的乘积（v1 的沙漠规则已经是
-    「LC100 裸地 ∧ 柯本干旱 ∧ 海拔 < 3500 m」——它本来就在拿气候判，只是把结果落进了存储）。
-  · **苔原 → 不存储**。它 = `草原/荒漠 ∧ 寒带`。`设计笔记03` §14.12 那个「苔原走 NE 手绘面
-    还是柯本 ET」的悬案到此结案：两边都不走。
-  · **裸地 → 改名「荒漠」，语义收紧为干旱区的裸露与稀疏植被**。v1 里它被沙漠规则掏空到
-    2,687 格（0.028%，名存实亡）；非干旱区的裸露地表（高山岩屑、冰川前缘）现在归**形态**
-    （山地/高原），因为那是地形起伏的事，不是覆盖的事。
-  · **新增绿洲与滩涂**。绿洲 = 干旱气候里的可耕地（实测 73,749 格，分布在印度河、尼罗河、
-    两河、塔里木南缘、河西走廊）；滩涂 = 贴海的潮滩湿地（LC100 90 或格内水占比 ≥30% 的
-    沿海格，≈1.1 万格）。滩涂还顺手解掉一个两难：它让"格内过半是海的小岛格"既保住岛、
-    又不长假河、也不留绿边。
-  · **农田、聚落仍然并入平原**；**灌丛仍然并入草原**；**山地/高原仍然不用 NE 具名多边形定形**
-    （形态全交给高程 + 起伏）。这三条 v1 的判断不变。
+v2 让形态与覆盖**抢同一个值**，规则是"形态赢"。实测后果：全图形态类 520,660 格里有
+**514,976 格（98.9%）底下藏着一个 LC100 覆盖**；西北窗口（96–108°E/32–40.5°N）更是
+**100%**——那一片 LC100 说草原 19,471 格、裸地 9,845、森林 4,230、农田 3,050，
+图上却只显示"高原 20,705"。于是：
 
-**覆盖与形态仍是"互斥取一"**：形态（山地/高原）不吃覆盖，所以一格记「山地」就看不见它的
-森林。真正的正交分层（覆盖一层、形态一层）留待将来——现状 14 类只占 4 位，余两个码。
+  · **河湟谷地不见了**：西宁那格 2321 m、起伏 140 m → 判「高原」，而 LC100 说它是农田；
+  · **陇右整片是高原**：天水、定西同样被形态吃掉覆盖；
+  · **沙漠/苔原分不出来**：`沙漠 = 荒漠 ∧ 干旱`、`苔原 = 草原 ∧ 寒带`，可高原上的格
+    根本没有覆盖可以相乘。
 
-**改这张表 = 改数据契约**：地形编码直接写进 `栅格/地形编码.png`，编辑器 `js/config.js`
-的 `TER_COLORS` 与 `js/data.js` 的 `terrain_legend` 必须同步；`base_tag` 含图例摘要，
-改表会让编辑器里的本地草稿全部失效。
+拆开之后一格可以同时是「高原 ∧ 草原」「山地 ∧ 森林」「高原 ∧ 农田（河谷）」，上面
+三件事一起解掉。两个半字节**共用原来那一个字节**，不加新图。
+
+拆开后顺带作废两条 v2 的规则（现在都成了可表达的组合）：
+
+  · `YIELD_TO_HILL`（丘陵接住草原）——"丘陵 ∧ 草原"现在能直接存，不必让位；
+  · `open_ground`（山地/高原不吃覆盖）——现在"山地 ∧ 森林"能直接存。
+
+**农田升格为覆盖类**（v2 是"农田 → 平原"）：v2 让农田与形态抢位，只好强行归平原；
+现在两轴分开，**农田不再与平原竞争**，于是它回到覆盖轴上——这也正是"河湟谷地要有"
+那一条的正解。绿洲仍是独立覆盖类（= 农田 ∧ 真沙漠气候），保留在图例里。
+
+**改这张表 = 改数据契约**：编码直接写进 `栅格/地形编码.png`，编辑器 `js/config.js`
+的 `TER_COLORS` 与 `js/data.js` 的 `cover_legend`/`form_legend` 必须同步；`base_tag`
+含图例摘要，改表会让编辑器里的本地草稿全部失效。
 """
 from __future__ import annotations
 
@@ -73,23 +72,46 @@ import zlib
 
 import numpy as np
 
-LEGEND = ["海洋", "湖泊", "河流", "冰川", "森林", "草原", "荒漠", "沼泽", "滩涂", "绿洲",
-          "平原", "丘陵", "高原", "山地"]
-(T_OCEAN, T_LAKE, T_RIVER, T_ICE, T_FOREST, T_GRASS, T_WASTE, T_MARSH, T_TIDAL, T_OASIS,
- T_PLAIN, T_HILL, T_PLATEAU, T_MOUNTAIN) = range(14)
+# ---- 覆盖：地形字节的**高 4 位**（12 值） ----
+COVER_LEGEND = ["海洋", "湖泊", "河流", "冰川", "森林", "草原", "荒漠", "沼泽", "滩涂",
+                "盐沼", "农田", "绿洲"]
+(C_OCEAN, C_LAKE, C_RIVER, C_ICE, C_FOREST, C_GRASS, C_WASTE, C_MARSH, C_TIDAL, C_SALTM,
+ C_FARM, C_OASIS) = range(12)
+N_COVER = len(COVER_LEGEND)
 
-N_CLASS = len(LEGEND)
+# ---- 形态：地形字节的**低 4 位**（4 值，实际只用 2 位） ----
+# ⚠️ 只有 4 个值，是因为运行态那条 32 位记录里形态只分到 **2 位**（见 docs/adr/0007）。
+# 原来那个"无（水冰格）"被删掉了：海洋格的形态位一律写 平原（0）当 don't-care——
+# 覆盖=海洋 已经足够识别海洋，再给形态留一个"无"就会把形态撑到 5 个值、2 位装不下
+# （这正是子代理验收时抓到的那个 bug：山地的 4 溢出进了热量带，10.9 万格错位）。
+# 湖泊与冰川**保留**它们的 landform（于是"高原湖泊"这类说法仍然成立）。
+FORM_LEGEND = ["平原", "丘陵", "高原", "山地"]
+(F_PLAIN, F_HILL, F_PLATEAU, F_MOUNTAIN) = range(4)
+N_FORM = len(FORM_LEGEND)
+
 VEG_UNKNOWN = 255                 # 植被层里"没有样本/无法归类"的哨兵（uint8）
 
-# ---- 植被层的候选标号：与地形类同码，另加两个**内部哨兵**（哨兵不进地形层） ----
-# v1 这里有 4 个"林型族"（常绿阔叶/针叶/阔叶/混交），要在 classify 里按纬度 + 海拔权重
-# 才能定性；v2 把林型合并成「森林」，那套权重制整段删除，候选层于是退化成
-# "地形类 + 两个哨兵"。
-CAND_BARE = 14                    # LC100 60「无植被～稀疏植被」：不当覆盖写进地形，
-                                  # 等 build_raster 按气候判（干旱 → 荒漠；否则留给形态）
-CAND_FOREST = 15                  # LC100 110–126 的任意林型：一律记「森林」
-N_CAND = 16
-VEG_ENCODING = "cover-v2"         # 换了编码就往缓存旁边写这个标记，对不上就不复用
+# ---- 植被层的候选标号：与**覆盖**同码，另加两个内部哨兵（哨兵不进地形层） ----
+CAND_BARE = 12                    # LC100 60「无植被～稀疏植被」：干旱区才算荒漠，交给调用方
+CAND_FOREST = 13                  # LC100 110–126 的任意林型：一律记「森林」
+N_CAND = 14
+VEG_ENCODING = "cover-v3"         # 换了编码就往缓存旁边写这个标记，对不上就不复用
+
+# ---------------------------------------------------------------- 地形字节的打包
+# 一个字节两个半字节：`码 = 覆盖 × 16 + 形态`。这样**不加新图**——编辑器少一套画布，
+# 而两者本来就永远一起读。海洋格的形态位恒为 0（F_NONE）。
+TER_BYTE_MAX = 15                 # 契约断言用：覆盖 ≤ 11、形态 ≤ 4，都塞得进半字节
+
+
+def pack(cover: np.ndarray, form: np.ndarray) -> np.ndarray:
+    """(覆盖, 形态) → 一个字节（覆盖在**高** 4 位）。"""
+    return ((cover.astype(np.uint16) << 4) | (form.astype(np.uint16) & 0x0F)).astype(np.uint8)
+
+
+def unpack(ter: np.ndarray):
+    """一个字节 → (覆盖, 形态)。"""
+    t = ter.astype(np.uint8)
+    return (t >> 4).astype(np.uint8), (t & 0x0F).astype(np.uint8)
 WATER_ENCODING = "waterfrac-v1"   # 水体占比层的缓存标记（LC100 80∪200 占有效样本的百分比）
 
 # 水体占比的用法：**逐格取众数会把"碎成几块的水"藏起来**。实测长江口有一格
@@ -113,24 +135,16 @@ LC100_SEA = 200                   # 开阔海
 LC100_NODATA = (0, 255)           # 0 = 无输入数据；255 = 产品 nodata
 
 LC100_DIRECT = {
-    20: T_GRASS,                       # 灌丛 → 草原（杂类，不单列）
-    30: T_GRASS,
-    40: T_PLAIN, 50: T_PLAIN,          # 农田 / 聚落 → 平原（干旱区的农田由 build_raster 改判「绿洲」）
-    60: CAND_BARE, 70: T_ICE,
-    80: T_LAKE, 90: T_MARSH,
-    100: T_GRASS,                      # 苔原植被（moss/lichen）→ 草原；显示时按热量带派生「苔原」
+    20: C_GRASS,                       # 灌丛 → 草原（杂类，不单列）
+    30: C_GRASS,
+    40: C_FARM, 50: C_FARM,            # 农田 / 聚落 → **农田**（v3 起是覆盖类，不再并进平原）
+    60: CAND_BARE, 70: C_ICE,
+    80: C_LAKE, 90: C_MARSH,
+    100: C_GRASS,                      # 苔原植被（moss/lichen）→ 草原；显示时按热量带派生「苔原」
     111: CAND_FOREST, 112: CAND_FOREST, 113: CAND_FOREST, 114: CAND_FOREST,
     115: CAND_FOREST, 116: CAND_FOREST, 121: CAND_FOREST, 122: CAND_FOREST,
     123: CAND_FOREST, 124: CAND_FOREST, 125: CAND_FOREST, 126: CAND_FOREST,
 }
-
-# 「缓坡」上让位给丘陵的土地覆盖类。**只让草原**：
-#   · 农田不让 —— 农田是平原（坡地农田也一样，那是土地利用）；
-#   · 森林不让 —— 西伯利亚的泰加林压在缓坡上，让位就把整片森林抹了；
-#   · 裸地/灌丛不让 —— 300 m 的碎石坡本来就该记「草原/荒漠」；
-#   · 草原让 —— "丘陵草原"是最典型的地貌（哈萨克丘陵、蒙古高原边缘），
-#     而丘陵若不吃下这块，就会只剩 LC100 无数据的那 0.05%，成了死类。
-YIELD_TO_HILL = (T_GRASS,)
 
 # ---------------------------------------------------------------- 形态阈值（起伏 = 格内 max−min）
 MOUNTAIN_RELIEF = 600.0           # 起伏 > 600 m → 山地
@@ -225,7 +239,7 @@ def _lut() -> np.ndarray:
     lut = np.full(256, VEG_UNKNOWN, np.uint8)
     for c, t in LC100_DIRECT.items():
         lut[c] = t
-    lut[LC100_SEA] = T_OCEAN
+    lut[LC100_SEA] = C_OCEAN
     for c in LC100_NODATA:
         lut[c] = VEG_UNKNOWN
     return lut
@@ -236,7 +250,7 @@ def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, c
     """逐格取 rs × cs 个样本的**主导候选**（16 类 + 4 族）。read_strip(row) → 该行窗口内的列。
 
     同时算出**水体占比**层（LC100 的 80 内陆水 ∪ 200 开阔海 占有效样本的百分比）。
-    为什么不另读一遍：LUT 已经把这两个码映射成 T_LAKE/T_OCEAN，所以水体计数就是
+    为什么不另读一遍：LUT 已经把这两个码映射成 C_LAKE/C_OCEAN，所以水体计数就是
     `cnt` 的两列之和——白拿。为什么需要它：见 `water_frac_note()`。
     """
     x = np.arange(W)
@@ -266,7 +280,7 @@ def _dominant_from_parts(W, H, cell, lon0, lat1, read_strip, cache_path, rs=8, c
         tot = g.sum(axis=1)
         best = g.argmax(axis=1).astype(np.uint8)
         veg[y] = np.where(tot > 0, best, VEG_UNKNOWN)
-        w = g[:, T_OCEAN] + g[:, T_LAKE]                    # 水体 = 开阔海 + 内陆水
+        w = g[:, C_OCEAN] + g[:, C_LAKE]                    # 水体 = 开阔海 + 内陆水
         water[y] = np.where(tot > 0, np.round(w * 100.0 / np.maximum(tot, 1)), 0).astype(np.uint8)
         if log and (y % 200 == 0 or y == H - 1):
             log(f"    植被/水体 {y + 1}/{H} 行")
@@ -441,67 +455,59 @@ def veg_from_landcover(W, H, cell, lon0, lon1, lat0, lat1, raw_path, tif_path, c
 
 # ================================================================ 分类
 def landform(elev: np.ndarray, relief: np.ndarray) -> np.ndarray:
-    """只按**起伏**（格内极差）给形态：平原 / 丘陵 / 高原 / 山地。
+    """只按**起伏**（格内极差）给形态码：平原(1) / 丘陵(2) / 高原(3) / 山地(4)。
 
     海拔只用来分「高原」——"高而平"的面；判丘陵/山地一律看起伏：
     海拔 4500 m 的青藏内部很平（高原），海拔 2000 m 的华山很陡（山地），
     四川盆地底部 400 m 且平坦（平原）——用海拔判会把盆地判成丘陵（踩过）。
 
-    起伏阈值（格 ≈ 6.9 × 5.3 km）：
-      山地：> 600 m（7 km 内上下 600 m，坡陡、绕路、马难走）
+    起伏阈值（格 ≈ 5.9 × 5.9 km）：
+      山地：> 600 m（6 km 内上下 600 m，坡陡、绕路、马难走）
       丘陵：> 120 m
       高原：2600 m 以上且起伏 ≤ 600（青藏），或 1200 m 以上且起伏 ≤ 400
             （蒙古高原、黄土高原、云贵高原、伊朗高原 —— 都是"面"不是"脊"）
       平原：其余
+
+    ⚠️ v3 起它**只出形态**，不再与覆盖抢同一个值：陇右（1500–2500 m、起伏 200–400 m）
+    照样判「高原」，但那里的覆盖（LC100 的草原/农田）现在**看得见了**——
+    这正是 `docs/adr/0007` 要修的东西。**不要把这里的阈值当成"西北画错了"的解**。
     """
-    out = np.full(elev.shape, T_PLAIN, np.uint8)
-    out[relief > HILL_RELIEF] = T_HILL
+    out = np.full(elev.shape, F_PLAIN, np.uint8)
+    out[relief > HILL_RELIEF] = F_HILL
     out[((elev > PLATEAU_HIGH_ELEV) & (relief <= MOUNTAIN_RELIEF))
-        | ((elev > PLATEAU_ELEV) & (relief <= PLATEAU_RELIEF_FLAT))] = T_PLATEAU
-    out[relief > MOUNTAIN_RELIEF] = T_MOUNTAIN
+        | ((elev > PLATEAU_ELEV) & (relief <= PLATEAU_RELIEF_FLAT))] = F_PLATEAU
+    out[relief > MOUNTAIN_RELIEF] = F_MOUNTAIN
     return out
 
 
-def classify(elev, relief, veg, land) -> np.ndarray:
-    """合成地形：**形态（平原/丘陵/高原/山地）先铺满 → 覆盖只在"非山地、非高原"的格子上生效**。
+def classify(elev, relief, veg, land):
+    """→ **(cover, form) 两张 uint8**（v3：两个轴，谁都不吃谁）。
 
-    山脊与高原面是真实地形，不该被覆盖盖掉（大兴安岭要看得见山）；平原与丘陵则露出
-    真实的覆盖（西伯利亚是森林、华北是农田=平原、南洋是热带林）。这里只出三类覆盖
-    ——森林／草原／（农田聚落给的）平原——**荒漠 / 绿洲 / 滩涂由调用方按气候与海岸再判**。
+    · **形态**全交给高程 + 起伏（`landform`），陆地格一律有值，水冰格为 0（无）。
+    · **覆盖**来自 LC100：森林 / 草原 / 农田 / 沼泽 / 湖泊 / 冰川…；`CAND_BARE`
+      （LC100 60 砾漠岩漠）**不在这里定性**——算不算「荒漠」要气候说了算，交给调用方。
+      荒漠 / 绿洲 / 滩涂 三类同样由调用方按气候与海岸后置覆盖。
 
     三条必须防的坑：
       · **LC100 200（开阔海）的格子不许盖到陆地上** —— 里海、咸海这类内海在 LC100 里
         记 200，而我们靠 NE 湖泊把它算作陆地；若让 200 生效就会写回「海洋」（里海曾经
         就这么变成海的）。排除掉，交给后面的 NE 湖泊面判成湖泊。
-      · **CAND_BARE 不写进地形** —— LC100 60（砾漠/岩漠/寒漠/盐碱滩）算不算「荒漠」要
-        看气候（干旱才算），所以这里留白、交给调用方按柯本判；非干旱的裸露地表保留
-        形态类（高山岩屑、冰川前缘），那本来就是起伏的事不是覆盖的事。
       · `land` 是 uint8 掩膜，**不能写 `~mask`** —— numpy 在 uint8 上按位取反，`~1 = 254`
-        （真值），于是"~hard"恒真，覆盖会被整层抹成形态（v1 就这么把森林全弄没过）。
-        先转 bool。
+        （真值），于是"~hard"恒真，覆盖会被整层抹掉（v1 就这么把森林全弄没过）。先转 bool。
+      · 陆地默认覆盖给**草原**（LC100 无数据时最不坏的猜测：既不是水面也不是森林）。
 
-    v1 在这里还要按"纬度 + 海拔权重"把林型族定成雨林/阔叶/针叶（`climate_weights` /
-    `_forest_label`）；v2 那套整段删除——林型归「森林」，四种绿改由编辑器按
-    `森林 × 热量带` 派生（见 tools/display_class.py）。
+    v2 里那两条"谁吃谁"的规则（`YIELD_TO_HILL` 丘陵接住草原、`open_ground` 山地/高原
+    不吃覆盖）**整段删除**：两轴分开之后，"丘陵 ∧ 草原""山地 ∧ 森林"本来就能直接存。
     """
     land = np.asarray(land).astype(bool)
-    t = np.where(land, T_PLAIN, T_OCEAN).astype(np.uint8)
-    lf = landform(elev, relief)
-    t[land] = lf[land]
+    form = np.zeros(elev.shape, np.uint8)
+    form[land] = landform(elev, relief)[land]
+    cover = np.full(elev.shape, C_OCEAN, np.uint8)
+    cover[land] = C_GRASS
     if veg is None:
-        return t
-    known = land & (veg != VEG_UNKNOWN) & (veg != T_OCEAN) & (veg != CAND_BARE)
-    open_ground = (t != T_MOUNTAIN) & (t != T_PLATEAU)
-    win = known & open_ground
-    win = win & ~((t == T_HILL) & np.isin(veg, YIELD_TO_HILL))     # 丘陵接住草原
-    is_forest = win & (veg == CAND_FOREST)
-    plain_veg = win & ~is_forest
-    t[plain_veg] = veg[plain_veg]
-    t[is_forest] = T_FOREST
-    return t
-
-
-def summarise(terrain: np.ndarray) -> dict:
-    n = terrain.size
-    counts = np.bincount(terrain.ravel(), minlength=N_CLASS)
-    return {LEGEND[i]: round(int(c) / n, 4) for i, c in enumerate(counts) if c}
+        return cover, form
+    known = land & (veg != VEG_UNKNOWN) & (veg != C_OCEAN) & (veg != CAND_BARE)
+    cover[known & (veg == CAND_FOREST)] = C_FOREST
+    passthru = known & (veg != CAND_FOREST)
+    cover[passthru] = veg[passthru]          # 0..10 的覆盖码直通（湖泊/冰川/沼泽/农田…）
+    return cover, form
