@@ -16,7 +16,7 @@
      直接拒绝。少了这一步，一次重跑管线之后的旧草稿会把整张图悄悄改回去。
   3. 校验：编码范围 < 65536 ｜ **地块不压海洋** ｜ **块区不越界** ｜ 编号不重复
   4. **备份**：将被覆盖的文件复制到 `地图/待合入/备份-<时间戳>/`
-     （仓库不是 git 仓库，误合入没有版本控制可回滚，所以备份是硬要求）
+     （合入是「覆盖真源」的动作；两个仓虽是 git 仓库，也不拿它当兜底，所以备份是硬要求）
   5. 写真源：两张 PNG 覆盖；`台账.json` 以真源那份为底，只换 `plots`／`districts` 与
      `counts.covered_cells`，重算 `base_tag`
   6. 重生成 `地图编辑器/js/data.js`（走 `tools/editor_data.py`，与 build_raster 同一写入口）
@@ -46,10 +46,49 @@ APP = os.path.join(ROOT, "地图", "地图编辑器")
 CODE_MAX = 65536          # R + G×256
 
 
-def read_codes(path: str) -> np.ndarray:
-    """24 位编码 PNG → int32 编码数组（R + G×256）。"""
-    a = np.asarray(Image.open(path).convert("RGB"), dtype=np.uint8)
-    return a[:, :, 0].astype(np.int32) + a[:, :, 1].astype(np.int32) * 256
+def read_codes(path: str, gray: bool = False) -> np.ndarray:
+    """PNG → 编码数组。
+
+    · `gray=False`（默认）：**24 位**编码，`R + G×256`。用于 `地块编码.png`，以及
+      v2 及以前那份"全局块区 id"的 `分区编码.png`。
+    · `gray=True`：**8 位单通道**，值就是值。用于 v3 起的 `分区编码.png`——它存的是
+      **地块内的局部序号**（1..32），见 `docs/adr/0007`。
+
+    ⚠️ 为什么要分两个解码器（2026-10-09 修的真 bug）：那份分区图**是 8 位灰度**
+    （`Image.fromarray(dist_local, "L")`），而它以前一直按 24 位读 —— 灰度图三通道同值，
+    于是每个局部序号被算成 `v + v×256 = 257v`：局部 1 变成 257、局部 2 变成 514，
+    `(plot<<8)|257v` 会**进位到下一个地块**，恰好撞上别的块区，于是
+    "块区越出了所属地块 1,262,380 格"、2151 个块区被当成"零像元"丢掉。
+    恒等草稿（真源原样回灌）本该校验通过，这条就是被它抓出来的。
+
+    编辑器导出的那张分区图是 canvas 出的 **RGBA**（R=G=B=值），灰度管线出的是 **L**；
+    两种都取 R 通道，并**要求三通道一致**——不一致说明这张真的是 24 位编码。
+    """
+    im = Image.open(path)
+    if not gray:
+        a = np.asarray(im.convert("RGB"), dtype=np.uint8)
+        return a[:, :, 0].astype(np.int32) + a[:, :, 1].astype(np.int32) * 256
+    a = np.asarray(im.convert("RGB"), dtype=np.int32)
+    r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+    if not (np.array_equal(r, g) and np.array_equal(g, b)):
+        raise ValueError(
+            f"{os.path.basename(path)} 的 R/G/B 三通道不一致：它应当是一张 8 位单通道图"
+            f"（管线写 L 模式，编辑器导出的 RGBA 三通道同值）。这张看起来是 24 位编码 ——"
+            f"说明草稿的 districts 带了 local、而图其实还是老口径，两边对不上。")
+    return r
+
+
+def _single_channel(im) -> bool:
+    """这张图是不是"**一个值**"的编码（8 位灰度，或 canvas 导出时三通道同值的 RGBA）？
+
+    管线写的是 `Image.fromarray(x, "L")`（模式 `L`）；编辑器由 canvas 导出，是 RGBA 但
+    R=G=B=值。两种都要认，且要与 24 位（R=低位、G=高位）区分开——判据是"三通道是否恒等"，
+    不用看图模式（RGBA 那种模式看不出来）。
+    """
+    if im.mode in ("L", "I", "I;16", "P", "1"):
+        return True
+    a = np.asarray(im.convert("RGB"))
+    return bool(np.array_equal(a[..., 0], a[..., 1]) and np.array_equal(a[..., 1], a[..., 2]))
 
 
 def _sample(cells, codes, n=3):
@@ -71,22 +110,44 @@ def validate(meta, ledger):
         errs.append(f"草稿是基于旧底图改的：草稿 based_on={ledger.get('based_on')!r}，"
                     f"真源当前 base_tag={cur_tag!r}。请重做（或先重跑 build_raster 再改）。")
 
-    pid, bid = read_codes(png_p), read_codes(png_d)
-    # 分区编码.png 存的是**地块内的局部序号**（v3，见 docs/adr/0007）。校验一律在**全局 id**
-    # 上做，所以先把局部折回全局：键 = 地块×256 + 局部；地块号取自地块层**同一格**。
-    # 老草稿（v2 及以前）的 districts 没有 local，那时栅格里本来就是全局 id，按原样用。
     districts = ledger.get("districts") or []
-    if any("local" in b for b in districts):
+    has_local = any("local" in b for b in districts)
+    pid = read_codes(png_p)
+    # ---- 分区层的编码口径：**让图自己说话，再拿台账对证**，两边不一致就拒绝（不许猜）----
+    # v3 起分区图是 8 位单通道（存地块内的局部序号）；v2 及以前是 24 位（存全局 id）。
+    # ⚠️ 判据**不能只看台账**：一张 8 位图配一份没有 local 的台账，按 24 位读会得到 257v
+    # （最大 65535 < 65536，编码范围那条检查抓不到），最后报成"块区越界"，很难查。
+    # 反过来（图是 24 位而台账有 local）以前靠 read_codes 抛 ValueError，现在也走这条友好拒绝。
+    single = _single_channel(Image.open(png_d))
+    if single != has_local:
+        errs.append(
+            f"{F_DIST} 的口径与草稿台账不符：图是"
+            f"{'8 位单通道（地块内局部序号）' if single else '24 位（全局块区 id）'}，"
+            f"而草稿的 districts {'带' if has_local else '不带'} local 字段。"
+            f"两边必须是同一代：v3 起分区图存局部序号（8 位灰度）、台账带 local；"
+            f"v2 及以前图存全局 id（24 位）、台账没有 local。")
+    bid = read_codes(png_d, gray=has_local)
+    if pid.shape != bid.shape:
+        errs.append(f"两张草稿 PNG 尺寸不一致：{F_PLOT} {pid.shape[1]}×{pid.shape[0]}，"
+                    f"{F_DIST} {bid.shape[1]}×{bid.shape[0]}")
+        return errs, warns, {}
+    if has_local:
         l2g = {}
         for b in districts:
-            l2g[(int(b.get("plot") or 0) << 8) | int(b.get("local") or 0)] = int(b["id"])
+            plot, loc = int(b.get("plot") or 0), int(b.get("local") or 0)
+            # ⚠️ **未挂地块的块区（plot=0）不建键**：栅格里它本来就写作 0（渲染成灰、不落笔），
+            # 而 `(0<<8)|0 = 0` 会把**全图所有无块区的像元（含海洋与未收录陆地）**都折成它，
+            # 于是统计里混进 700 万格"块区像元"、其余 plot=0 的块区互相覆盖后当成零像元丢掉。
+            if plot <= 0 or loc <= 0:
+                continue
+            l2g[(plot << 8) | loc] = int(b["id"])
         bid = np.array([l2g.get((int(pp) << 8) | int(ll), 0)
                         for pp, ll in zip(pid.ravel(), bid.ravel())],
                        dtype=np.int32).reshape(pid.shape)
         warns.append("分区层按 draft 台账的 (plot, local) 折回全局 id 后再校验")
     else:
         warns.append("草稿的 districts 没有 local 字段（v2 及以前的草稿）：把分区层当作全局 id 处理")
-    if pid.shape != (H, W) or bid.shape != (H, W):
+    if pid.shape != (H, W):
         errs.append(f"尺寸不符：草稿 {pid.shape[1]}×{pid.shape[0]}，真源 {W}×{H}")
         return errs, warns, {}
 

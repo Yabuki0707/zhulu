@@ -17,7 +17,8 @@
 | [地图/地图编辑器/](地图/地图编辑器/README.md) | ★ **栅格编辑器（唯一入口）**：`index.html + js/ + css/`，双击 `启动编辑器.bat` 起本地服务打开。**编辑器不持有图**——由 `serve.py` 的 `/数据/` 虚拟挂载读真源（`docs/adr/0002`） |
 | [tools/fetch_map_data.py](tools/fetch_map_data.py) · [tools/probe_hartwell.py](tools/probe_hartwell.py) | 下载器（幂等、续传、校验）· 只读诊断（数量/投影/邻接） |
 | [tools/build_editor.py](tools/build_editor.py) · [tools/build_raster.py](tools/build_raster.py) · [tools/import_editor.py](tools/import_editor.py) | 单元与种子地块（含中文名）· 栅格底图 + 参考顶点 · **编辑器草稿合回真源**（校验 + 备份） |
-| [tools/terrain.py](tools/terrain.py) · [tools/refvec.py](tools/refvec.py) · [tools/check_terrain.py](tools/check_terrain.py) | 地形分类（16 类，权重制林型）· 参考层矢量顶点 · 底图自检（含「地块不入海」硬检查） |
+| [tools/terrain.py](tools/terrain.py) · [tools/climate.py](tools/climate.py) · [tools/display_class.py](tools/display_class.py) | 地形分类（**覆盖 × 形态**两个半字节）· 柯本气候两轴产品层 · 显示类规则表（覆盖 × 形态 × 气候，**不存储**） |
+| [tools/refvec.py](tools/refvec.py) · [tools/check_terrain.py](tools/check_terrain.py) | 参考层矢量顶点 · 底图自检（三条硬检查 + 33 个已知地点断言，含「地块不入海」） |
 | 地图/plots.geojson · mapdata.js · tools/build_map.py | ⬜ **待建**：正式管线产物；眼下可直接用编辑器的「导出 GeoJSON」充当第一版 |
 
 落地设计（分模块详细设计）待需求与总体设计确认后另行开篇，届时按模块分别成文。
@@ -56,8 +57,9 @@
 ```
 地图/地图数据/原始数据/             中华县级（GADM CHN L3）+ ETOPO 高程 + LC100 土地覆盖 + Natural Earth
 地图/地图数据/基础单元.json          基础单元 + 种子地块（中文名）
-地图/地图数据/栅格/                  地块编码.png + 分区编码.png + 地形编码.png（16 类）
-                                     + 参考顶点.bin（矢量）+ 台账.json + 高程/起伏/植被_降采样.npy
+地图/地图数据/栅格/                  地块编码.png + 分区编码.png + 地形编码.png（覆盖 × 形态）+ 气候编码.png
+                                     + 参考顶点.bin（矢量）+ 台账.json + 高程/起伏/植被/气候/水体_降采样.npy
+地图/地图数据/运行态/                底图.bin（**给游戏读**：每格一条 32 位记录，zlib；见 docs/adr/0007）
 地图/地图编辑器/                     ★ 栅格编辑器（唯一入口：index.html + js/ + css/，双击 启动编辑器.bat）
 地图/待合入/                        编辑器存草稿的地方（合入前先备份到这里），由 tools/import_editor.py 合回真源
 tools/build_raster.py                矢量单元 → 栅格（ETOPO 高程 + 起伏 + LC100 土地覆盖 + NE 掩膜）
@@ -66,7 +68,7 @@ tools/fetch_china_counties.py        抓阿里 DataV 县级（备选，当前被
 地图/plots.geojson · tools/build_map.py   正式管线产物 —— ⬜ 待建（可用编辑器「导出台账」暂代）
 ```
 
-**栅格编辑器用法**：`视图/编辑` 两种模式；单元 `1` 地域（编辑对象是地块）`2` 地块（栅格）`3` 块区（所属地块内的栅格）`4` 地形（**只读**，仅视图模式可见——地形图由管线定稿，`docs/adr/0001`）；
+**栅格编辑器用法**：`视图/编辑` 两种模式；三个可编辑单元 `1` 地域（编辑对象是地块）`2` 地块（栅格）`3` 块区（所属地块内的栅格），外加两个**只读自然层** `4` 地形 `5` 气候（**仅视图模式**——它们由管线定稿，`docs/adr/0001`；编辑模式下单元条上根本没有它们）；
 笔/橡皮用顶栏 SVG 开关（`B`/`X`），半径 1–50 格（`[` `]`）；`Ctrl+Z` 撤销（一次拖拽一步）；
 `⋯` 里可导出地块/块区编码 PNG 与台账 CSV；**改完走 `⋯ → 存到待合入目录`**，再用 `python tools/import_editor.py` 合入真源。
 

@@ -44,8 +44,9 @@ def with_layer_urls(payload: dict) -> dict:
 def write_data_js(payload: dict, app_dir: str | None = None) -> str:
     """写 `地图/地图编辑器/js/data.js`，返回写入的路径。
 
-    payload 传的是"语义"部分（grid / terrain_legend / plots / palette / domains /
-    districts / base_tag / land_rule），图层 URL 由本模块补。
+    payload 传的是"语义"部分（grid / cover_legend / form_legend / display_classes /
+    climate_legend / plots / palette / domains / districts / base_tag / land_rule），
+    图层 URL 由本模块补。
     """
     if app_dir is None:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

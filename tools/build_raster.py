@@ -54,7 +54,7 @@ from shapely.geometry import MultiPolygon, Polygon, shape
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geo_wrap import wrap_into, supercover                          # noqa: E402
 from mapdata import (ROOT, under, UNITS as UNITS_JSON, RASTER, NE_DIR,      # noqa: E402
-                     NE_LAND, NE_LAKES, NE_RIVERS, NE_REGIONS, NE_GLACIATED,
+                     NE_LAND, NE_LAKES, NE_RIVERS, NE_GLACIATED,
                      ETOPO_TIF, LC100_TIF, LC100_RAW, HARTWELL_ZIP, URL_PREFIX,
                      KOPPEN_ZIP, hydro_rivers, CELL as CELL0,
                      SCOPE_LON0, SCOPE_LON1, SCOPE_LAT0, SCOPE_LAT1)
@@ -112,7 +112,7 @@ def assert_contract(terrain, form, plot_id, districts, heat, moist, klim, lat, l
     `CL.fill_land_nodata` 补洞，这条断言守着它不再长回来。
 
     第 6 条（显示类覆盖全组合）是 v3 新加的：拆成两轴之后，`(覆盖, 形态)` 的组合数从 14
-    涨到 12×5，**规则表漏一个组合**的后果是编辑器里显示 "地形 undefined"（v1 真的发生过：
+    涨到 12×4，**规则表漏一个组合**的后果是编辑器里显示 "地形 undefined"（v1 真的发生过：
     调色板里存了下标而不是颜色串）。
     """
     bad = []
@@ -408,8 +408,17 @@ def name_tag(seeds) -> str:
 
 
 def legend_tag() -> str:
-    """图例摘要：**覆盖与形态都要进**——只改形态同样会让旧草稿失效。"""
-    return _bt_legend_tag(list(TERRAIN_LEGEND) + list(FORM_LEGEND))
+    """保留这个名字做兼容（旧调用点）；真正的清单见下面的 LEGEND_FOR_TAG。"""
+    return _bt_legend_tag(LEGEND_FOR_TAG)
+
+
+# **base_tag 的图例输入：覆盖名 + 形态名**（顺序即清单顺序，改名/换序/增删都会让指纹变）。
+# ⚠️ 必须与 `import_editor._legend(meta)` 完全一致（同样 12 个覆盖名 + 4 个形态名、同样顺序）。
+# 两边不一致的后果是**静默**的：同一份底图会算出两个指纹，于是一次恒等合入就把编辑器里
+# 全部本地增量存档判成"基于旧底图"而作废。2026-10-09 的链路验证（把真源原样回灌）
+# 就是这么抓到的：`…-td4f2` → `…-td91e`。原先这里传的是 `TERRAIN_LEGEND`（只有覆盖名），
+# 而 `legend_tag()` 这个"覆盖＋形态"的包装函数从来没被调用过 —— 死代码骗过了所有人。
+LEGEND_FOR_TAG = list(TERRAIN_LEGEND) + list(FORM_LEGEND)
 
 
 # ---------------------------------------------------------------- 运行态转储（v3 新增）
@@ -424,8 +433,9 @@ def write_runtime(cover, form, plot_id, dist_local, heat, moist, W, H, cell, out
         位 20..8   地块 13     位 7..0    块区局部 8
         = 32 位整 → 一个 `Uint32Array` 装完
 
-    地理区（8 位）**将来单独一个 `Uint8Array`**，不进这条记录：它是叠在行政图上的另一类
-    信息，不该挤占"每格一条"的热路径。
+    **没有第七个字段**：地理区层 2026-10-09 裁掉（`docs/adr/0006`），自然地表到这里为止
+    ——覆盖 × 形态 × 气候三层就是全部。真要有第四层自然属性，它得**另开一个数组**，
+    不许挤占"每格一条"的这条 32 位记录。
 
     为什么值得落这一件：真源那几张 PNG 是给人看、给人单层改的（合计约 0.12 B/格）；而游戏
     要的是"一次随机访问拿到全部字段"。实测原始数组 zlib 压一遍只有约 1 MiB——**比那几张
@@ -439,8 +449,7 @@ def write_runtime(cover, form, plot_id, dist_local, heat, moist, W, H, cell, out
            | (heat.astype(np.uint32) << 24) | (moist.astype(np.uint32) << 21)
            | (plot_id.astype(np.uint32) << 8) | dist_local.astype(np.uint32))
     hdr = json.dumps({"magic": "ZLRB1", "w": int(W), "h": int(H), "cell": float(cell),
-                      "layout": "cover4|form2|heat2|moist3|plot13|block8",
-                      "region": "地理区将来单独一个 Uint8 数组（尚未建）"},
+                      "layout": "cover4|form2|heat2|moist3|plot13|block8"},
                      ensure_ascii=False).encode("utf-8")
     blob = len(hdr).to_bytes(4, "little") + hdr + zlib.compress(rec.tobytes(), 9)
     os.makedirs(out_dir, exist_ok=True)
@@ -653,14 +662,14 @@ def main() -> int:
                 water_path=os.path.join(OUT, F_WATER))
             if veg is not None:
                 share = float((veg != TR.VEG_UNKNOWN).mean())
-                show = ((T_GRASS, "草原"), (T_FARM, "农田聚落"), (TR.CAND_FOREST, "森林"),
+                show = ((T_GRASS, "草原"), (T_FARM, "农田聚落→草甸"), (TR.CAND_FOREST, "森林"),
                         (TR.CAND_BARE, "裸地"))
                 print(f"  覆盖层覆盖 {share * 100:.1f}% 像元（" +
                       "，".join(f"{nm} {int((veg == t).sum()):,}" for t, nm in show) + "）")
                 print(f"  水体占比层：≥{TR.WATER_PCT}% 的格 {int((water >= TR.WATER_PCT).sum()):,}"
                       f"（含海洋与湖泊；不是既有水面的碎水见下面「碎水补面」那行）")
         # v3：classify 出**两张**——覆盖（高 4 位）与形态（低 4 位）。两轴谁也不吃谁，
-        # 于是"高原上的草原/农田"第一次存得下来（见 adr/0007）。
+        # 于是「高原 ∧ 草原」「高原 ∧ 草甸」第一次存得下来（见 adr/0007）。
         terrain, form = TR.classify(elev, relief, veg, land)
 
         # 柯本气候类 → 两个轴（热量带 × 干湿），并**出产品层** `气候编码.png`。
@@ -767,8 +776,8 @@ def main() -> int:
 
         # Natural Earth 在这条管线里现在只剩一件事：**水与冰**（湖泊 / 河流 / 冰川）——
         # 那是物理事实，土地覆盖产品分不了这么细。
-        #   · **高原与山脉不再烧**：那是地理区划的手绘椭圆块（一条条褐色团），形态交给
-        #     高程 + 格内极差（terrain.landform），出来的是真实山系。
+        #   · **高原与山脉不再烧**：那是 Natural Earth 自己的手绘椭圆块（一条条褐色团），
+        #     形态交给高程 + 格内极差（terrain.landform），出来的是真实山系。
         #   · **荒漠不再用 NE 的手绘沙漠面**（2026-10-08 改，需求方报"沙漠边界太平滑"）。
         #     老做法是「NE 沙漠面内 ∧ LC100 裸地 → 沙漠」，可那个面**仍是掩膜**：面内的边
         #     是 LC100 的，**外轮廓与交界仍是 NE 的**。实测那条缝外侧 25.5% 仍是 LC100 裸地
@@ -777,7 +786,8 @@ def main() -> int:
         #   · **苔原整段删除**（v2）：它是 `草原 ∧ 寒带`，在显示层派生，不再存储
         #     ——`设计笔记03` §14.12 那个"苔原走 NE 手绘面还是柯本 ET"的悬案随之结案。
         # 详见 tools/climate.py、tools/display_class.py 与 `设计笔记03` §14.11。
-        REG = ne_features(NE_REGIONS)
+        # `自然地理区.zip` 那层**不读**：地理区层 2026-10-09 裁掉（见 docs/adr/0006）。
+        # 原始件仍在 `原始数据/自然地球/` 备着，与灰度晕渲、重要经纬线同处一类（下了但没用）。
         # **覆盖里那三类要靠气候与海岸才判得出来**：荒漠 / 绿洲 / 滩涂。
         if klim is not None and veg is not None:
             arid = np.isin(klim, CL.ARID)
@@ -916,8 +926,9 @@ def main() -> int:
                   os.path.join(os.path.dirname(OUT), "运行态"), log=print)
     # 底图指纹：写进台账，也写进 data.js。import_editor 要靠它判断草稿是否基于旧底图
     # （工单 §3.3、§4.2 第 2 步），所以必须在 meta 落盘**之前**算出来。
+    # ⚠️ 图例一律走 LEGEND_FOR_TAG（覆盖＋形态），与 import_editor._legend 同口径——见那里的说明。
     base_tag = make_base_tag(cell, W, H, len(seeds), covered,
-                             [s["n"] for s in seeds], TERRAIN_LEGEND)
+                             [s["n"] for s in seeds], LEGEND_FOR_TAG)
     meta = {
         "grid": {"lon0": LON0, "lon1": LON1, "lat0": LAT0, "lat1": LAT1, "cell": cell,
                  "w": W, "h": H,
@@ -931,7 +942,7 @@ def main() -> int:
         "terrain_encoding": "8 位灰度 = 覆盖（高 4 位）× 16 + 形态（低 4 位）；解包见 tools/terrain.py 的 unpack（docs/adr/0007）",
         "land_rule": "陆地 = Natural Earth 10m 陆地 ∪ 湖泊 ∪ 冰川区（格心命中）；"
                      "地形层的「海洋」是该掩膜的补集，地块层也被它裁过",
-        "cover_rule": "覆盖 = LC100 土地覆盖（森林/草原/平原）＋ 由气候与海岸判出的三类："
+        "cover_rule": "覆盖 = LC100 土地覆盖（森林/草原/草甸）＋ 由气候与海岸判出的三类："
                       "荒漠 = 裸地 ∧ 干旱 ∧ 海拔 < 3500 m；绿洲 = 可耕地 ∧ 干旱；"
                       "滩涂 = LC100 湿地 ∧ 贴海。**沙漠/苔原不存储**，由「覆盖 × 气候」派生"
                       "（见 ADR 0006）",
