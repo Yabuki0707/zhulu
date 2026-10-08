@@ -7,6 +7,9 @@
 
 硬检查（任一不过 → 退出码 1）：
 
+  0. **显示类配色**：任意两类的最小 CIE Lab ΔE ≥ `display_class.PALETTE_MIN_DE`（9.0）。
+     名字是**全函数**（见 `tools/display_class.py`），所以这里不再查"规则表漏没漏组合"，
+     只守"每个显示类都有独特色"这条。
   1. **地块不压海洋**：`覆盖 == 海洋` 的像元上，`地块编码` 必须全部为 0。
      这是需求方定的规矩，也是"海陆口径只有一处"的直接推论。
   2. **地形字节在契约内**：高 4 位覆盖 < 12、低 4 位形态 < 4，且**海洋格的形态位必须是 0**。
@@ -20,6 +23,10 @@
 它们是显示类，由「覆盖 × 形态 × 气候」当场派生。所以这里断言的是**覆盖**（撒哈拉/塔克拉玛干
 断的是「荒漠」，西伯利亚断的是「森林」），而"沙漠/针叶林"这些名字只出现在打印出来的
 显示类那一列里。
+
+⚠️ v4（2026-10-09）显示类由 24 类涨到 **59 类**：名字不再来自一张"有序首命中 + 兜底"的规则表，
+而是 `display_class.label()` 的**按轴词表**（全函数，任何组合都有名字）。于是图例里第一次
+**看得到**亚热带硬叶林（地中海）、高原针叶林、温带典型草原这些真实的中间态。
 """
 from __future__ import annotations
 
@@ -115,6 +122,13 @@ def main() -> int:
     print(f"地形字节 = 覆盖×16 + 形态；实测最大 {int(terr_byte.max())}")
 
     bad = 0
+    # ---- 硬检查 0：显示类的**配色契约**（v4：名字是全函数，所以这里只守"每类独特色"） ----
+    n_cls, min_de = DC.verify(log=lambda s: None)
+    ok0 = min_de >= DC.PALETTE_MIN_DE
+    print(f"\n[0] 显示类 {n_cls} 类（名字与配色见 tools/display_class.py）：任意两类最小 "
+          f"CIE Lab ΔE {min_de:.1f}" + ("✓" if ok0 else
+          f"✗ 小于契约的 {DC.PALETTE_MIN_DE:g}（跑 python tools/display_class.py 看是哪几对）"))
+    bad += 0 if ok0 else 1
     # ---- 硬检查 1：地块不压海洋 ----
     sea = cover == TR.C_OCEAN
     n_sea_plot = int((sea & (plot > 0)).sum())

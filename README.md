@@ -17,7 +17,7 @@
 | [地图/地图编辑器/](地图/地图编辑器/README.md) | ★ **栅格编辑器（唯一入口）**：`index.html + js/ + css/`，双击 `启动编辑器.bat` 起本地服务打开。**编辑器不持有图**——由 `serve.py` 的 `/数据/` 虚拟挂载读真源（`docs/adr/0002`） |
 | [tools/fetch_map_data.py](tools/fetch_map_data.py) · [tools/probe_hartwell.py](tools/probe_hartwell.py) | 下载器（幂等、续传、校验）· 只读诊断（数量/投影/邻接） |
 | [tools/build_editor.py](tools/build_editor.py) · [tools/build_raster.py](tools/build_raster.py) · [tools/import_editor.py](tools/import_editor.py) | 单元与种子地块（含中文名）· 栅格底图 + 参考顶点 · **编辑器草稿合回真源**（校验 + 备份） |
-| [tools/terrain.py](tools/terrain.py) · [tools/climate.py](tools/climate.py) · [tools/display_class.py](tools/display_class.py) | 地形分类（**覆盖 × 形态**两个半字节）· 柯本气候两轴产品层 · 显示类规则表（覆盖 × 形态 × 气候，**不存储**） |
+| [tools/terrain.py](tools/terrain.py) · [tools/climate.py](tools/climate.py) · [tools/display_class.py](tools/display_class.py) | 地形分类（**覆盖 × 形态**两个半字节）· 柯本气候两轴产品层 · **显示类**（覆盖 × 形态 × 气候 的组合 = 地形；59 类，按轴词表命名 + ΔE 硬检查，**不存储**） |
 | [tools/refvec.py](tools/refvec.py) · [tools/check_terrain.py](tools/check_terrain.py) | 参考层矢量顶点 · 底图自检（三条硬检查 + 33 个已知地点断言，含「地块不入海」） |
 | 地图/plots.geojson · mapdata.js · tools/build_map.py | ⬜ **待建**：正式管线产物；眼下可直接用编辑器的「导出 GeoJSON」充当第一版 |
 

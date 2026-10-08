@@ -140,19 +140,20 @@ def assert_contract(terrain, form, plot_id, districts, heat, moist, klim, lat, l
             bad.append(f"陆地上还有 {n} 格无气候数据（最小 |纬度| {minlat:.1f}°）——"
                        f"干湿码 0 会把它静默读成「寒带」；先补洞（CL.fill_land_nodata）")
     if form is not None:
-        cv = np.unique(terrain)
-        fv = np.unique(form)
-        miss = DC.missing(cv, fv, log=log)
-        if miss:
-            bad.append(f"显示类规则表漏了 {miss} 个 (覆盖, 形态) 组合")
+        # 第 6 条（显示类）v4 起换了口径：名字是**全函数**（tools/display_class.py 的按轴词表），
+        # 不再有"规则表漏了哪个组合"这回事，也没有"被前面通配规则吃掉的死规则"——**没有规则**。
+        # 改成守两件真会错的事：
+        #   · `display_lut` 必须**覆盖全部 1536 个组合**（编辑器只查这张表，940 万格全走它）；
+        #   · **任意两类的最小 ΔE ≥ 9**（"每个显示类都有独特色"不能只靠肉眼）。
+        _n_cls, min_de = DC.verify(log=log)
+        if min_de < DC.PALETTE_MIN_DE:
+            bad.append(f"显示类配色最小 ΔE {min_de:.1f} < {DC.PALETTE_MIN_DE}"
+                       f"（见 python tools/display_class.py 的 ΔE 报告）")
         if heat is not None and moist is not None:
-            dead = DC.rule_hits(terrain, form, heat, moist, log=log)
-            if dead:
-                bad.append(f"显示类有 {len(dead)} 条规则从未命中（被前面的通配规则吃掉）："
-                           + "、".join(dict.fromkeys(dead)))
+            DC.usage(TR.pack(terrain, form), CL.pack(heat, moist), log=log)
     log(f"  契约断言：覆盖 <12 ✓  形态 <4 ✓  海洋形态=0 ✓  地块 ≤8,191 ✓  "
         f"热量带 ≤3 / 干湿 ≤7 ✓  每地块块区 ≤255（实测最多 {worst}）✓  "
-        f"陆地无气候洞 ✓  显示类覆盖全组合 ✓")
+        f"陆地无气候洞 ✓  显示类 LUT 全覆盖 + 配色最小 ΔE ≥ {DC.PALETTE_MIN_DE:g} ✓")
     assert not bad, "数据契约被破坏：\n  · " + "\n  · ".join(bad)
 
 
@@ -920,7 +921,7 @@ def main() -> int:
                   for i, c in enumerate(fcounts) if c}
     # **数据契约断言**放在落盘之前（ADR 0006）：4 位覆盖、14 位地块、8 位块区局部码，
     # 余量都不大，而"余量用尽"的后果是静默截断——宁可让管线在这一步红掉。
-    from display_class import entries as _disp_entries, note as _disp_note
+    from display_class import note as _disp_note
     assert_contract(terrain, form, plot_id, districts, heat, moist, klim, LAT, land, log=print)
     write_runtime(terrain, form, plot_id, dist_local, heat, moist, W, H, cell,
                   os.path.join(os.path.dirname(OUT), "运行态"), log=print)
@@ -985,7 +986,7 @@ def main() -> int:
     # **图不再拷给编辑器**：真源只有 地图数据/栅格/ 一处（见 docs/adr/0002），
     # 编辑器由 serve.py 的 /数据/ 虚拟挂载去读它。这里只写它要的 js/data.js。
     from build_editor import load_palette
-    from editor_data import write_data_js
+    from editor_data import write_data_js, payload_from_meta
     pal = load_palette()
     APP = os.path.join(ROOT, "地图", "地图编辑器")
     # 上一代把参考层烧成 县界参考.png 的产物已废弃：留着只会让人以为它还在用
@@ -999,21 +1000,7 @@ def main() -> int:
         shutil.rmtree(old_copy)
         print(f"  已删除编辑器副本 {os.path.relpath(old_copy, ROOT)}（真源唯一，见 docs/adr/0002）")
 
-    payload = {
-        "grid": meta["grid"], "cover_legend": TERRAIN_LEGEND, "form_legend": FORM_LEGEND,
-        "climate_legend": {"heat": list(CL.HEAT_NAMES), "moist": list(CL.MOIST_NAMES),
-                           "encoding": "热量带 × 8 + 干湿（0..31）；干湿 = 0 读作寒带",
-                           "note": meta["climate_rule"]},
-        "display_classes": _disp_entries(),
-        "plots": meta["plots"], "palette": pal,
-        "domains": [{"g": g["geo"], "d": d} for g in pal for d in g["domains"]],
-        "districts": districts,
-        "block_rule": "块区 = 地块的下一级行政单元（中华＝县；世界暂无二级，每地块 1 个占位）。"
-                      "与地块层在同一个 contains_xy 循环里写出，故块区必然落在其声明地块内；"
-                      "管线只出底稿，定稿在编辑器里改",
-        "base_tag": base_tag,
-        "land_rule": meta["land_rule"],
-    }
+    payload = payload_from_meta(meta, pal)
     p = write_data_js(payload, APP)
     print(f"  {os.path.relpath(p, ROOT)}"
           f"（图走 {URL_PREFIX} 虚拟挂载 → 地图数据/栅格/）")

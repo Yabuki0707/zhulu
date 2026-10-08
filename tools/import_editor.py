@@ -39,7 +39,7 @@ Image.MAX_IMAGE_PIXELS = None
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mapdata import ROOT, RASTER, STAGING                       # noqa: E402
 from basetag import base_tag as make_base_tag                   # noqa: E402
-from editor_data import write_data_js                           # noqa: E402
+import editor_data as ED                                        # noqa: E402
 
 F_PLOT, F_DIST, F_META = "地块编码.png", "分区编码.png", "台账.json"
 APP = os.path.join(ROOT, "地图", "地图编辑器")
@@ -306,26 +306,9 @@ def main() -> int:
     # ---------------- 6. 重生成 data.js（与 build_raster 同一写入口） ----------------
     from build_editor import load_palette
     pal = load_palette()
-    # v2/v3 的新键必须**原样带过去**：data.js 是编辑器唯一的入口，漏一个键
-    # 编辑器就会在启动时炸（cover_legend 缺失 → COVER_NAMES undefined）。
-    import display_class as DC                                          # noqa: E402
-    import climate as CL                                                # noqa: E402
-    payload = {
-        "grid": meta["grid"],
-        "cover_legend": meta.get("cover_legend"), "form_legend": meta.get("form_legend"),
-        "display_classes": DC.entries(),
-        "climate_legend": {"heat": list(CL.HEAT_NAMES), "moist": list(CL.MOIST_NAMES),
-                           "encoding": "热量带 × 8 + 干湿（0..31）；干湿 = 0 读作寒带",
-                           "note": meta.get("climate_rule", "")},
-        "plots": [dict({"id": p["id"], "name": p["name"]},
-                       **({"domain": p["domain"]} if p["domain"] else {})) for p in plots],
-        "palette": pal,
-        "domains": [{"g": g["geo"], "d": d} for g in pal for d in g["domains"]],
-        "districts": districts,
-        "base_tag": new_tag,
-        "land_rule": meta["land_rule"],
-    }
-    p = write_data_js(payload, APP)
+    # 与 build_raster 收尾那一步**调同一个构造函数**：两边各拼一份 payload 必然分叉
+    # （实测 import_editor 那份漏了 block_rule、键序也不同）。见 editor_data.payload_from_meta。
+    p = ED.write_data_js(ED.payload_from_meta(meta, pal), APP)
     print(f"  已重写 {os.path.relpath(p, ROOT)}")
 
     # ---------------- 7. 摘要 ----------------
