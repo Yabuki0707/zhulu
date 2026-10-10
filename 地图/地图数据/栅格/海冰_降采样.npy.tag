@@ -1,0 +1,1 @@
+{"encoding": "nsidc-seaicemar-v1"}

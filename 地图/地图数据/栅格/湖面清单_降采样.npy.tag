@@ -1,0 +1,1 @@
+{"encoding": "glwd1-polys-v2"}

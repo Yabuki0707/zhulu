@@ -1,0 +1,1 @@
+{"encoding": "glwd3-pan-v1"}

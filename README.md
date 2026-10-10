@@ -15,10 +15,8 @@
 | [TODO.md](TODO.md) | **待办工单**：性能待办、管线缺口含（「把县级行政图灌进分区层」这条未完成的新需求）、等拍板事项，以及已完成清单 |
 | [地图/地图数据/](地图/地图数据/README.md) | 原始数据与加工产物：Natural Earth + Hartwell 唐→明 + CHGIS 1820 水系 + 日本德川 + 流域 + **GADM 中华县级 + ETOPO 高程**，共 23 件 293 MB（另 grand 栅格底料），附许可与校验值 |
 | [地图/地图编辑器/](地图/地图编辑器/README.md) | ★ **栅格编辑器（唯一入口）**：`index.html + js/ + css/`，双击 `启动编辑器.bat` 起本地服务打开。**编辑器不持有图**——由 `serve.py` 的 `/数据/` 虚拟挂载读真源（`docs/adr/0002`） |
-| [tools/fetch_map_data.py](tools/fetch_map_data.py) · [tools/probe_hartwell.py](tools/probe_hartwell.py) | 下载器（幂等、续传、校验）· 只读诊断（数量/投影/邻接） |
-| [tools/build_editor.py](tools/build_editor.py) · [tools/build_raster.py](tools/build_raster.py) · [tools/import_editor.py](tools/import_editor.py) | 单元与种子地块（含中文名）· 栅格底图 + 参考顶点 · **编辑器草稿合回真源**（校验 + 备份） |
-| [tools/terrain.py](tools/terrain.py) · [tools/climate.py](tools/climate.py) · [tools/display_class.py](tools/display_class.py) | 地形分类（**覆盖 × 形态**两个半字节）· 柯本气候两轴产品层 · **显示类**（覆盖 × 形态 × 气候 的组合 = 地形；59 类，按轴词表命名 + ΔE 硬检查，**不存储**） |
-| [tools/refvec.py](tools/refvec.py) · [tools/check_terrain.py](tools/check_terrain.py) | 参考层矢量顶点 · 底图自检（三条硬检查 + 33 个已知地点断言，含「地块不入海」） |
+| [**地图/栅格地形数据生成器/**](地图/栅格地形数据生成器/README.md) | ★ **地形流程整包（唯一入口）**：双击 `生成地形.bat` 起**可视化界面**（参数 ＋ 阶段清单 ＋ 实时日志），或 `生成地形.bat --no-veg` 走命令行。流程是 `管线.py` 的一张**阶段表**（六步，一步一个模块，`阶段/*.py`），参数全在 `参数.py`（管线参数 ＋ 规则门槛），底层动作在 `栅格工具.py`。三张**表**在其中：`terrain.py`（覆盖 × 形态契约）、`climate.py`（柯本两轴）、`display_class.py`（88 个显示类的名字与配色）；五个数据源各自的读法：`rivers.py`（河网）、`sanddunes.py`（沙/砾材质）、`glwd.py`（盐盘/闭合盆地/湖面清单）、`ice.py`（海冰）、`volcano.py`（火山）。产物自检走 `check_terrain.py`；取数走 `fetch_map_data.py`。**逐条判定规则见** [docs/地形覆盖判定规格.md](docs/地形覆盖判定规格.md) |
+| [tools/build_editor.py](tools/build_editor.py) · [tools/import_editor.py](tools/import_editor.py) | 行政图那两半：单元与种子地块（含中文名，出 `基础单元.json`，是地形流程的**上游**）· **编辑器草稿合回真源**（校验 + 备份 + 重刷 `data.js`） |
 | 地图/plots.geojson · mapdata.js · tools/build_map.py | ⬜ **待建**：正式管线产物；眼下可直接用编辑器的「导出 GeoJSON」充当第一版 |
 
 落地设计（分模块详细设计）待需求与总体设计确认后另行开篇，届时按模块分别成文。
@@ -62,13 +60,13 @@
 地图/地图数据/运行态/                底图.bin（**给游戏读**：每格一条 32 位记录，zlib；见 docs/adr/0007）
 地图/地图编辑器/                     ★ 栅格编辑器（唯一入口：index.html + js/ + css/，双击 启动编辑器.bat）
 地图/待合入/                        编辑器存草稿的地方（合入前先备份到这里），由 tools/import_editor.py 合回真源
-tools/build_raster.py                矢量单元 → 栅格（ETOPO 高程 + 起伏 + LC100 土地覆盖 + NE 掩膜）
+地图/栅格地形数据生成器/生成.py                矢量单元 → 栅格（ETOPO 高程 + 起伏 + LC100 土地覆盖 + NE 掩膜）
 tools/build_editor.py                单元 + 种子地块（中文名 + 重叠检测）
 tools/fetch_china_counties.py        抓阿里 DataV 县级（备选，当前被限流）
 地图/plots.geojson · tools/build_map.py   正式管线产物 —— ⬜ 待建（可用编辑器「导出台账」暂代）
 ```
 
-**栅格编辑器用法**：`视图/编辑` 两种模式；三个可编辑单元 `1` 地域（编辑对象是地块）`2` 地块（栅格）`3` 块区（所属地块内的栅格），外加两个**只读自然层** `4` 地形 `5` 气候（**仅视图模式**——它们由管线定稿，`docs/adr/0001`；编辑模式下单元条上根本没有它们）；
+**栅格编辑器用法**：`视图/编辑` 两种模式；三个可编辑单元 `1` 地域（编辑对象是地块）`2` 地块（栅格）`3` 块区（所属地块内的栅格），外加四个**只读自然层** `4` **样式**（＝覆盖 × 形态 × 气候 合成的显示类）`5` **覆盖**（地表是什么）`6` **形态**（平陡）`7` 气候（**仅视图模式**——它们由管线定稿，`docs/adr/0001`；编辑模式下单元条上根本没有它们；前两层就是需求方要的"覆盖与样式两种模式"）；
 笔/橡皮用顶栏 SVG 开关（`B`/`X`），半径 1–50 格（`[` `]`）；`Ctrl+Z` 撤销（一次拖拽一步）；
 `⋯` 里可导出地块/块区编码 PNG 与台账 CSV；**改完走 `⋯ → 存到待合入目录`**，再用 `python tools/import_editor.py` 合入真源。
 
