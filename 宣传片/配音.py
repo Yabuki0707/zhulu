@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""配音.py：用本机 index-tts 与指定音色给宣传片配音。当前用“月半猫”。
+"""配音.py：用本机 index-tts 与指定音色给宣传片配音。当前用“麦克阿瑟”。
 
     python 配音.py                 # 合成 旁白.txt 里的所有句子
     python 配音.py --句 3          # 只合成第 3 句。改稿后重跑单句，省时间
@@ -31,8 +31,8 @@ import wave
 
 这里 = os.path.dirname(os.path.abspath(__file__))
 TTSEd = r"C:\Users\Yabuk\Desktop\index-tts"
-音色 = "月半猫"
-参考音 = os.path.join(这里, "素材", "月半猫_参考.wav")
+音色 = "麦克阿瑟"
+参考音 = os.path.join(这里, "素材", "麦克阿瑟_参考.wav")
 旁白 = os.path.join(这里, "旁白.txt")
 输出目录 = os.path.join(这里, "配音")
 时长表 = os.path.join(输出目录, "时长.json")

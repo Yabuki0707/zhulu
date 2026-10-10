@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """提参考音.py：从音色预设里抽出参考音频，供 index-tts 零样本克隆用。
 
-    python 提参考音.py                 # 默认取“月半猫”
+    python 提参考音.py                 # 默认取“麦克阿瑟”
     python 提参考音.py 奶龙            # 换一个音色
     python 提参考音.py --列            # 列出可用的音色名
 
@@ -22,7 +22,7 @@ import wave
 
 这里 = os.path.dirname(os.path.abspath(__file__))
 预设目录 = r"C:\Users\Yabuk\Desktop\Speech-AI-Forge-spks\spks"
-默认音色 = "月半猫"
+默认音色 = "麦克阿瑟"
 
 
 def 找预设(名: str):
