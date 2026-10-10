@@ -304,6 +304,7 @@
 | 16 | `tools/rename_mapdata.py` | 一次性迁移脚本（英文名 → 中文名），使命已完成、幂等可重复跑。留着不碍事，但按"只留在用的东西"的原则可归档/删除 |
 | 17 | `tools/fetch_china_counties.py` | 阿里 DataV 抓取被 **403 限流**，样本只覆盖北京+天津。将来若要把中华底图从 GADM（非商用）换成许可更宽的数据源，得先解决这个限流 |
 | 18 | `地图/栅格地形数据生成器/probe_hartwell.py` | 只读诊断（唐 741 州面：数量 / 投影 / 邻接）。现在 `生成.py` 的 `tang_rings()` 直接 `from probe_hartwell import load`，**校验脚本被当库用了** —— 要么把 `load()` 挪进 `geo_wrap.py` 或新模块，要么在 probe 里标注"供管线复用" |
+| 19 | ~~**上传 GitHub**~~ —— **已上传**（2026-10-10，见文末「已完成」） | 两个仓各自独立：**`github.com/Yabuki0707/zhulu`**（主仓：文档 ＋ 管线 ＋ 编辑器用到的 `data.js`）与 **`github.com/Yabuki0707/zhulu-map-editor`**（编辑器仓）。踩的坑记一笔：**给的 `github_pat_11B6…` 是 fine-grained 令牌，没有建仓权限**（`POST /user/repos` 回 `Resource not accessible`）——**建仓必须用 classic 令牌的 `repo` 范围**；最后是拿本机 Git 凭据管理器里那枚 classic 凭据建的仓（`git credential fill` 取出，**全程没落到任何文件里**，已 `git grep` 核过仓内无令牌字样）。**给过的那枚 fine-grained 令牌建议吊销**：它已出现在聊天记录里 |
 
 ## 四、等需求方拍板
 
