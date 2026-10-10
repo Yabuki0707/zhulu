@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>逐鹿 · 栅格地形数据生成器</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🗺️</text></svg>">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">🗺️</span>
+    <div>
+      <h1>栅格地形数据生成器</h1>
+      <p class="sub">《逐鹿》底图 · 覆盖 × 形态 × 气候 → 显示类 · 管线六步</p>
+    </div>
+  </div>
+  <div class="top-right">
+    <span id="badge-contract" class="chip ok" title="规则门槛是否等于规格 §8 写死的契约值">契约值</span>
+    <span id="badge-run" class="chip mute">空闲</span>
+    <button id="btn-run" class="primary">开始生成</button>
+    <button id="btn-stop" class="ghost" disabled>中断</button>
+  </div>
+</header>
+
+<main>
+  <!-- 参数 -->
+  <section class="card params">
+    <div class="card-h">
+      <h2>参数</h2>
+      <div class="h-actions">
+        <button id="btn-default" class="ghost sm">恢复契约默认</button>
+      </div>
+    </div>
+    <h3>管线参数 <span class="hint">只影响“跑得多细”</span></h3>
+    <div class="grid" id="pipe-params"></div>
+    <h3>规则门槛 <span class="hint">⚠️ 改了就<b>不再是契约产品</b>（规格 §8 写死了这些数）</span></h3>
+    <div class="grid" id="rule-params"></div>
+  </section>
+
+  <!-- 阶段 -->
+  <section class="card stages">
+    <div class="card-h"><h2>阶段</h2><span class="hint" id="stage-timer">顺序即语义 · 后一步压前一步</span></div>
+    <ol id="stage-list"></ol>
+  </section>
+
+  <!-- 日志 -->
+  <section class="card log-card">
+    <div class="card-h">
+      <h2>日志</h2>
+      <div class="h-actions">
+        <label class="switch"><input type="checkbox" id="follow" checked><span>跟随</span></label>
+        <button id="btn-selfcheck" class="ghost sm">跑一遍自检</button>
+        <button id="btn-clear" class="ghost sm">清屏</button>
+      </div>
+    </div>
+    <pre id="log" class="log"></pre>
+  </section>
+
+  <!-- 数据下载 -->
+  <section class="card data">
+    <div class="card-h">
+      <h2>原始数据 <span class="hint">一键下载 · 幂等续传 · 带字节数校验</span></h2>
+      <button id="btn-all" class="ghost sm">全部下载</button>
+    </div>
+    <div class="grid groups" id="groups"></div>
+    <p class="note" id="data-note"></p>
+  </section>
+
+  <!-- 产物 -->
+  <section class="card products">
+    <div class="card-h">
+      <h2>产物</h2>
+      <div class="h-actions">
+        <button id="btn-refresh" class="ghost sm">刷新</button>
+        <button id="btn-open" class="ghost sm">打开目录</button>
+      </div>
+    </div>
+    <table id="products"><thead><tr><th>文件</th><th>目录</th><th class="num">大小</th><th>改于</th><th>md5</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<footer>
+  <span>入口：<code>生成地形.bat</code>（双击＝本页）· 命令行：<code>生成地形.bat --no-veg</code> · 桌面兜底：<code>run.py --桌面</code></span>
+</footer>
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
