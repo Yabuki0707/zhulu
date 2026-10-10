@@ -20,7 +20,8 @@
 顺带还有个好处：截图保持 2560 × 1440 原分辨率参与重采样，最高只放大 1.08 倍，比先缩到
 1920 再放大清楚得多。字幕用 Pillow 画成 PNG 再叠，也就不必碰 drawtext 的中文转义。
 
-依赖 Pillow 与 ffmpeg。
+依赖 Pillow 与 ffmpeg。编码用 CRF 21：截图为主，CRF 18 与 21 的同帧差异不到 1/255，
+但文件从 55 MB 降到 35 MB，仓库里好放。
 """
 from __future__ import annotations
 
@@ -235,7 +236,7 @@ def 出段(底, 字层, 效果: str, fx: float, fy: float, zmax: float, 秒: flo
     p = subprocess.Popen(
         ["ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
          "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "medium",
-         "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS), out],
+         "-crf", "21", "-pix_fmt", "yuv420p", "-r", str(FPS), out],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     for k in range(n):
         t = k / max(n - 1, 1)
