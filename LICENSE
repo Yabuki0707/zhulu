@@ -76,7 +76,7 @@ Zhulu Personal Project License — Learning Only, Non-Commercial
     (c) HydroSHEDS 不得作为独立数据产品再分发（只能随产品一同提供）；
     (d) 承担 CC BY 4.0 与 Copernicus 的署名义务。正式引用文本已抄录在
         `地图/地图数据/说明.md` 第三节，再分发时请一并保留；
-    (e) Hartwell 与 CHGIS 的三处声明互相矛盾，按最保守的“仅学术非商用”执行。
+    (e) Hartwell 与 CHGIS 的 3 处声明互相矛盾，按最保守的“仅学术非商用”执行。
 
 3.4 本项目不主张对上游数据本身、以及对由上游数据简单加工得到的中间图层（例如
     栅格底图 `地图/地图数据/栅格/*.png`）享有任何超出上游许可的权利。
