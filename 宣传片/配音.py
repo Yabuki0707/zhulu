@@ -1,23 +1,25 @@
 # -*- coding: utf-8 -*-
-"""配音.py —— 用本机 index-tts ＋「奶龙」音色给宣传片配音。
+"""配音.py：用本机 index-tts 与“奶龙”音色给宣传片配音。
 
-    python 配音.py                 # 合成 旁白.txt 里所有句子
-    python 配音.py --句 3          # 只合成第 3 句（改稿后重跑单句，省时间）
+    python 配音.py                 # 合成 旁白.txt 里的所有句子
+    python 配音.py --句 3          # 只合成第 3 句。改稿后重跑单句，省时间
 
-音色来源：`Speech-AI-Forge-spks/spks/fishspeech_community/fs_奶龙.spkv1.json`
-里的参考音频（3.82 s，44.1 kHz 单声道 PCM，随预设内嵌 base64）——
-那是"零样本克隆"要的东西：给一段参考音 ＋ 它的文本，模型照着这个嗓子念新词。
-由 `提参考音.py` 抽出成 `素材/奶龙_参考.wav`。
+音色来源是 `Speech-AI-Forge-spks/spks/fishspeech_community/fs_奶龙.spkv1.json`
+里内嵌的参考音频，3.82 s，44.1 kHz 单声道 PCM，base64 存放。零样本克隆要的就是
+这段东西：给一段参考音和它的文本，模型照着这个嗓子念新词。参考音由 `提参考音.py`
+抽成 `素材/奶龙_参考.wav`。
 
-模型：`C:/Users/Yabuk/Desktop/index-tts/checkpoints`。
-**用的是 v2.5 那套**（config.yaml 里 `version: 2.5`；checkpoint 目录里是 `codec.pth` ＋
-`multilingual_zh_ja_yue_char_del.tiktoken` ＋ `qwen0.6bemo4-merge/`）——所以导入
-`indextts.infer_v2_5` 而不是 `infer_v2`：后者要 `bpe.model`，而**那一份 checkpoint 里没有**
-（config.yaml 里 `dataset.bpe_model` 是 v2 留下的死字段，v2.5 走 tiktoken，用不上它）。
-显存 8 GB，用 bf16；`use_cuda_kernel` 关掉（要现场编译，第一次很慢且易失败）。
-v2.5 自带低显存分句（>40 字自动切开），长句不必自己拆。
+模型在 `C:/Users/Yabuk/Desktop/index-tts/checkpoints`，用的是 v2.5 那一套。
+config.yaml 里写着 `version: 2.5`，目录里是 `codec.pth` 与
+`multilingual_zh_ja_yue_char_del.tiktoken` 与 `qwen0.6bemo4-merge/`，所以要从
+`indextts.infer_v2_5` 导入，不能用 `infer_v2`。后者要 `bpe.model`，而这一份
+checkpoint 里没有这个文件。config.yaml 里的 `dataset.bpe_model` 是 v2 留下的死字段，
+v2.5 走 tiktoken，用不上它。
 
-输出：`配音/句01.wav` …，以及一份 `配音/时长.json`（每句秒数，合成视频时要用）。
+显存 8 GB，所以用 bf16，并关掉 `use_cuda_kernel`（要现场编译，第一次很慢，也容易失败）。
+v2.5 自带低显存分句，超过 40 字会自动切开，长句不必自己拆。
+
+输出是 `配音/句01.wav` 等，以及一份 `配音/时长.json`，记录每句秒数，合成视频时要用。
 """
 from __future__ import annotations
 
@@ -62,7 +64,7 @@ def main() -> int:
     a = ap.parse_args()
 
     if not os.path.isfile(参考音):
-        print("缺参考音：", 参考音, "—— 先跑 提参考音.py", file=sys.stderr)
+        print("缺参考音：", 参考音, "。先跑 提参考音.py", file=sys.stderr)
         return 2
     sys.path.insert(0, TTSEd)
     os.chdir(TTSEd)                                   # config.yaml 里是相对路径
@@ -70,7 +72,7 @@ def main() -> int:
     from indextts.infer_v2_5 import IndexTTS2
 
     t0 = time.time()
-    print("[1/2] 载模型（首次约 1–2 分钟）…", flush=True)
+    print("[1/2] 载模型，首次约 1 至 2 分钟", flush=True)
     bf16 = torch.cuda.is_bf16_supported()
     print(f"      bf16 支持：{bf16}", flush=True)
     tts = IndexTTS2(cfg_path=os.path.join(TTSEd, "checkpoints", "config.yaml"),

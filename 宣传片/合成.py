@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
-"""合成.py —— 把「实机产物截图 ＋ 奶龙旁白」合成宣传片。
+"""合成.py：把实机产物截图与奶龙旁白合成宣传片。
 
     python 合成.py
 
-画面全部来自**实机产物**，没有一张是画的（封面／布局／许可／尾卡四张说明卡除外，
+画面全部来自实机产物，没有一张是画的（封面、布局、许可、尾卡四张说明卡除外，
 那四张的文字是设计稿，底图仍取自实机截屏）：
-  · 编辑器四层截屏（样式／覆盖／形态／气候，都是真跑出来的颜色与图例）
-  · 编辑器放大到咸海的截屏（悬停读数写着「咸湖 · 咸湖·平原·温带·干旱」，60°E 44.9°N）
-  · 生成器网页截屏（参数／六步阶段／日志里那次真下载的进度）
+  · 编辑器四层截屏（样式、覆盖、形态、气候，都是真跑出来的颜色与图例）
+  · 编辑器放大到咸海的截屏（悬停读数写着咸湖、平原、温带、干旱，60°E 44.9°N）
+  · 生成器网页截屏（参数、六步阶段、日志里那次真下载的进度）
 
 音频是 `配音.py` 用本机 index-tts ＋ 奶龙音色合成的 `配音/句NN.wav`；
 本脚本按 `配音/时长.json` 把每句配到对应画面上（句前句后各留 0.35 s 气口）。
 
-每帧右上角常驻一行小字「个人项目延伸产物 · 仅供学习 · 禁止商用」——
-需求方要求整片都能看出性质，不只是结尾打一行。
+每帧右上角常驻一行小字：个人项目延伸产物，仅供学习，禁止商用。
+需求方要求整片都能看出性质，不只结尾打一行。
 
-两条踩过的坑，都写死在代码里：
-① **静图送进 zoompan 必须显式 `-framerate 30`**：默认 25 fps，而输出是 30 fps，
+两处经验写在这里：
+其一，静图送进 zoompan 必须显式写 `-framerate 30`。默认是 25 fps，输出是 30 fps，
    每段悄悄短掉六分之一（整片 98 s 变 82 s）。末尾有一道时长断言兜着。
-② **不要预先裁剪再放大**：裁一块 530 px 宽的图例拉到 1920 宽＝3.6 倍上采样，糊成一团。
-   改成给 zoompan 一个「往哪儿推」的目标点，只在原图上放大 1.2–1.5 倍，字还是清的。
+其二，不要预先裁剪再放大。曾把 530 px 宽的图例裁出来拉到 1920 宽，3.6 倍上采样，糊成一团。
+   改成给 zoompan 一个目标点，只在原图上放大 1.2–1.5 倍，字还是清的。
 
 依赖 Pillow（卡片与字幕条，避开 drawtext 的中文转义坑）＋ ffmpeg（zoompan ＋ overlay）。
 """
@@ -42,7 +42,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 W, H, FPS = 1920, 1080, 30
 气口 = 0.35                        # 每句前后的静音
 开场留白 = 1.2                     # 封面多留一点
-常驻小字 = "个人项目延伸产物 · 仅供学习 · 禁止商用"
+常驻小字 = "个人项目延伸产物，仅供学习，禁止商用"
 
 字体粗 = r"C:\Windows\Fonts\msyhbd.ttc"
 字体细 = r"C:\Windows\Fonts\msyh.ttc"
@@ -51,8 +51,8 @@ W, H, FPS = 1920, 1080, 30
 灰 = (152, 157, 164)
 强调 = (222, 172, 96)
 
-# 编辑器截屏里「画布」那一块（量过：整块 99.9% 不是白底，即全是地图，不含侧栏与顶栏）。
-# 说明卡拿它当底图，比把整个界面压暗好看得多——界面里大片白底，压到 38% 还是灰的。
+# 编辑器截屏里画布那一块。量过，整块 99.9% 不是白底，即全是地图，不含侧栏与顶栏。
+# 说明卡拿它当底图，比把整个界面压暗好看。界面里大片是白底，压到 38% 还是灰的。
 画布 = {"编辑器_样式.png": (258, 160, 1292, 852),
         "编辑器_咸湖_样式.png": (258, 160, 1292, 852)}
 
@@ -74,7 +74,7 @@ def 满幅(im: Image.Image) -> Image.Image:
 
 
 def 压暗(im: Image.Image, 系数: float) -> Image.Image:
-    """按亮度压暗（不是往黑里 blend）——blend 会把白色拉成灰，亮度乘法才是真的暗下去。"""
+    """按亮度压暗。往黑里 blend 会把白色拉成灰，亮度乘法才是真的暗下去。"""
     return ImageEnhance.Brightness(im).enhance(系数)
 
 
@@ -89,10 +89,10 @@ def 卡_封面() -> Image.Image:
     d.text((W // 2, 372), "《逐鹿》", font=字(True, 156), fill=纸, anchor="mm")
     d.text((W // 2, 522), "栅格地形管线", font=字(True, 100), fill=纸, anchor="mm")
     d.line([(W // 2 - 310, 612), (W // 2 + 310, 612)], fill=强调, width=3)
-    d.text((W // 2, 686), "覆盖 × 形态 × 气候  →  样式", font=字(False, 52), fill=(206, 210, 216), anchor="mm")
-    d.text((W // 2, 756), "3819 × 2472 格 · 9.44 M 像元 · 一格 ≈ 5.86 km",
+    d.text((W // 2, 686), "覆盖 × 形态 × 气候，合成样式", font=字(False, 52), fill=(206, 210, 216), anchor="mm")
+    d.text((W // 2, 756), "3819 × 2472 格，944 万像元，一格约 5.86 km",
            font=字(False, 38), fill=灰, anchor="mm")
-    d.text((W // 2, 866), "个人项目延伸产物 · 仅供学习 · 禁止商用",
+    d.text((W // 2, 866), "个人项目延伸产物，仅供学习，禁止商用",
            font=字(True, 42), fill=强调, anchor="mm")
     return im
 
@@ -100,7 +100,7 @@ def 卡_封面() -> Image.Image:
 def 卡_字节() -> Image.Image:
     """布局卡：一格一个字节长什么样（覆盖 5 位 ＋ 形态 3 位），气候另存一张。
 
-    文字全部压在 y<900 以上——字幕条占底部 y≈933..1035，压上去就叠字了（踩过）。
+    文字全部排在 y<900 以上。字幕条占底部 y≈933 至 1035，压上去就叠字了。
     """
     im = Image.new("RGB", (W, H), 墨)
     d = ImageDraw.Draw(im)
@@ -109,8 +109,8 @@ def 卡_字节() -> Image.Image:
 
     x0, y0, 格宽, 格高 = 372, 344, 148, 150
     for i, (名, 位, 释, 色) in enumerate([
-            ("覆盖", "5 位", "海洋／湖泊／密林／草原／\n沙质裸地／咸湖 … 共 20 类", 强调),
-            ("形态", "3 位", "平原／丘陵／高原／山地\n共 4 类", (132, 180, 218))]):
+            ("覆盖", "5 位", "海洋、湖泊、密林、草原、\n沙质裸地、咸湖等，共 20 类", 强调),
+            ("形态", "3 位", "平原、丘陵、高原、山地\n共 4 类", (132, 180, 218))]):
         数 = 5 if i == 0 else 3
         x = x0 + i * (格宽 * 5 + 56)
         for b in range(数):
@@ -122,9 +122,9 @@ def 卡_字节() -> Image.Image:
             d.text((x, y0 + 格高 + 42 + j * 46), line, font=字(False, 30), fill=灰)
 
     d.line([(372, 700), (W - 372, 700)], fill=(66, 70, 76), width=2)
-    d.text((W // 2, 768), "气候另存一张：热量带 4 档 × 干湿 8 档，与地形是两张图、两根轴",
+    d.text((W // 2, 768), "气候另存一张图：热量带 4 档，干湿 8 档，与地形是两张图",
            font=字(False, 38), fill=(202, 206, 212), anchor="mm")
-    d.text((W // 2, 856), "三根轴一交叉 → 显示类（样式）88 个名字",
+    d.text((W // 2, 856), "三根轴一交叉，得到 88 个显示类",
            font=字(True, 44), fill=强调, anchor="mm")
     return im
 
@@ -137,10 +137,10 @@ def 卡_许可() -> Image.Image:
     行 = [("这是个人项目的延伸产物", 纸, True),
           ("为一个自己的世界观服务，不隶属任何公司、机构或组织", 灰, False),
           ("仅供学习交流    禁止商用", 强调, True),
-          ("再分发须署名 ＋ 同方式共享 ＋ 标明改动", 灰, False),
-          ("上游数据各有各的许可：GADM 非商用；", (198, 202, 208), False),
-          ("HydroRIVERS / HydroBASINS、GLWD 不许作为独立数据产品再分发", (198, 202, 208), False),
-          ("完整条款见仓库根的 LICENSE 与 地图数据/说明.md §三", 灰, False)]
+          ("再分发须署名，以相同方式共享，并标明改动", 灰, False),
+          ("上游数据各有各的许可：GADM 非商用，", (198, 202, 208), False),
+          ("HydroRIVERS 与 HydroBASINS、GLWD 不许作独立数据产品再分发", (198, 202, 208), False),
+          ("完整条款见仓库根目录的 LICENSE 与 地图数据/说明.md 第三节", 灰, False)]
     y = 340
     for 文, 色, 粗 in 行:
         d.text((W // 2, y), 文, font=字(粗, 46 if 粗 else 34), fill=色, anchor="mm")
@@ -152,10 +152,10 @@ def 卡_尾() -> Image.Image:
     im = 地图底("编辑器_咸湖_样式.png", 0.46)
     d = ImageDraw.Draw(im)
     d.text((W // 2, 366), "逐鹿", font=字(True, 156), fill=纸, anchor="mm")
-    d.text((W // 2, 498), "栅格地形管线 · 只读视图层编辑器", font=字(False, 42), fill=(206, 210, 216), anchor="mm")
+    d.text((W // 2, 498), "栅格地形管线，只读视图层编辑器", font=字(False, 42), fill=(206, 210, 216), anchor="mm")
     d.text((W // 2, 634), "github.com/Yabuki0707/zhulu", font=字(False, 40), fill=强调, anchor="mm")
     d.text((W // 2, 700), "github.com/Yabuki0707/zhulu-map-editor", font=字(False, 40), fill=强调, anchor="mm")
-    d.text((W // 2, 848), "个人项目延伸产物 · 仅供学习 · 禁止商用", font=字(True, 42), fill=纸, anchor="mm")
+    d.text((W // 2, 848), "个人项目延伸产物，仅供学习，禁止商用", font=字(True, 42), fill=纸, anchor="mm")
     return im
 
 
@@ -189,7 +189,7 @@ def 画字幕(文: str) -> Image.Image:
 
 # ------------------------------------------------------------------ 场景表
 # (号, 配图 或 None=说明卡, 效果, 目标点 x, 目标点 y, 推到底的倍数)
-# 目标点是**归一化坐标**：0=最左/最上，1=最右/最下；推近时视窗收拢到它附近。
+# 目标点是归一化坐标，0 是最左或最上，1 是最右或最下。推近时视窗收拢到它附近。
 场景 = [
     (1,  None,                 "静",   0.50, 0.50, 1.00),
     (2,  "编辑器_形态.png",      "推近", 0.50, 0.50, 1.18),
@@ -227,13 +227,13 @@ def 推拉表(效果: str, 帧数: int, fx: float, fy: float, zmax: float) -> st
 def 跑(cmd: list[str]) -> None:
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if p.returncode != 0:
-        print("ffmpeg 失败：", " ".join(cmd[:8]), "…")
+        print("ffmpeg 失败：", " ".join(cmd[:8]), "⋯⋯")
         print((p.stderr or "")[-2500:])
         raise SystemExit(1)
 
 
 def 拼音频(句: list[dict]) -> tuple[str, list[float]]:
-    """按「气口 ＋ 句 ＋ 气口」把各句拼成一条音轨，并返回每段时长（＝画面上每段该多长）。"""
+    """按“气口 ＋ 句 ＋ 气口”把各句拼成一条音轨，并返回每段时长，即画面上每段该多长。"""
     out = os.path.join(这里, "旁白_整条.wav")
     时长 = []
     with wave.open(os.path.join(配音目录, "句01.wav")) as f:
@@ -258,7 +258,7 @@ def 拼音频(句: list[dict]) -> tuple[str, list[float]]:
 def main() -> int:
     时长文件 = os.path.join(配音目录, "时长.json")
     if not os.path.isfile(时长文件):
-        print("没有 配音/时长.json —— 先跑 python 配音.py", file=sys.stderr)
+        print("没有 配音/时长.json，先跑 python 配音.py", file=sys.stderr)
         return 2
     os.makedirs(场景目录, exist_ok=True)
     表 = json.load(open(时长文件, encoding="utf-8"))
@@ -266,7 +266,7 @@ def main() -> int:
 
     音轨, 时长 = 拼音频(句)
 
-    print(f"渲染 {len(场景)} 段…")
+    print(f"渲染 {len(场景)} 段⋯⋯")
     段 = []
     for (号, 图名, 效果, fx, fy, zmax), 秒 in zip(场景, 时长):
         底 = 卡表[卡号[号]]() if 图名 is None else 满幅(Image.open(os.path.join(素材, 图名)).convert("RGB"))
@@ -284,7 +284,7 @@ def main() -> int:
              "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", out])
         段.append(out)
         print(f"  场{号:02d}  {秒:5.2f}s  {效果:<2}  {'（卡）' if 图名 is None else 图名}"
-              f"  {句[号-1]['文本'][:26]}…", flush=True)
+              f"  {句[号-1]['文本'][:26]}⋯⋯", flush=True)
 
     lst = os.path.join(场景目录, "清单.txt")
     open(lst, "w", encoding="utf-8").write("".join(f"file '{os.path.basename(p)}'\n" for p in 段))
@@ -299,7 +299,7 @@ def main() -> int:
     print(f"\n成片：{片名}")
     print(f"  预期 {总:.1f} s ｜ 实测 {实测:.1f} s ｜ {W}×{H} {FPS} fps ｜ {os.path.getsize(片名) / 1e6:.1f} MB")
     if abs(实测 - 总) > 0.6:
-        print(f"  ⚠️ 实测与预期差 {abs(实测 - 总):.1f} s —— 检查输入帧率是否等于 {FPS}")
+        print(f"  ⚠️ 实测与预期差 {abs(实测 - 总):.1f} s，检查输入帧率是否等于 {FPS}")
         return 1
     return 0
 

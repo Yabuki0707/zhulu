@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""提参考音.py —— 从「奶龙」音色预设里抽出参考音频，供 index-tts 零样本克隆用。
+"""提参考音.py：从“奶龙”音色预设里抽出参考音频，供 index-tts 零样本克隆用。
 
     python 提参考音.py
 
 输入 `Speech-AI-Forge-spks/spks/fishspeech_community/fs_奶龙.spkv1.json`：
 那是 Speech-AI-Forge 的音色包（`DcSpk`），结构是
-`data.refs[0].data.{text, wav:{data: base64}, wav_sr}` —— **参考音与它的文本都内嵌在
-JSON 里**（base64 的裸 PCM），所以不需要另外找音频文件。
+`data.refs[0].data.{text, wav:{data: base64}, wav_sr}`。参考音与它的文本都内嵌在
+JSON 里，是 base64 的裸 PCM，所以不需要另外找音频文件。
 
-输出 `素材/奶龙_参考.wav`（44.1 kHz 单声道 16 位）。index-tts 的 `infer()` 要的就是
-「一段参考音 ＋ 参考音的文本」，它照着这个嗓子念新词。
+输出 `素材/奶龙_参考.wav`，44.1 kHz 单声道 16 位。index-tts 的 `infer()` 要的就是
+一段参考音和参考音的文本，它照着这个嗓子念新词。
 """
 from __future__ import annotations
 
