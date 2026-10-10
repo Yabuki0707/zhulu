@@ -21,6 +21,7 @@
 | [地图/地图编辑器/](地图/地图编辑器/README.md) | 栅格编辑器。入口是 `index.html` 与 `js/`、`css/`，双击 `启动编辑器.bat` 起本地服务打开。编辑器不持有图，由 `serve.py` 的 `/数据/` 虚拟挂载读真源，见 `docs/adr/0002` |
 | [地图/栅格地形数据生成器/](地图/栅格地形数据生成器/README.md) | 地形流程整包。双击 `生成地形.bat` 打开网页界面，可改参数、看阶段与实时日志，也能一键下载原始数据。流程是 `管线.py` 里的一张阶段表，共 6 步，一步一个模块，放在 `阶段/` 下。参数集中在 `参数.py`，底层动作在 `栅格工具.py`。3 张表分别在 `terrain.py`、`climate.py`、`display_class.py`；5 个数据源的读法在 `rivers.py`、`sanddunes.py`、`glwd.py`、`ice.py`、`volcano.py`。自检走 `check_terrain.py`，取数走 `fetch_map_data.py`。判定规则见 [docs/地形覆盖判定规格.md](docs/地形覆盖判定规格.md) |
 | [tools/build_editor.py](tools/build_editor.py) · [tools/import_editor.py](tools/import_editor.py) | 行政图的两半。前者生成单元与种子地块（含中文名，出 `基础单元.json`，是地形流程的上游）；后者把编辑器草稿合回真源（校验、备份、重刷 `data.js`） |
+| [封面/](封面/README.md) | 项目封面：海报样式，文字落在画面里，由 AIHubMix 的 `gpt-image-2.5-flare` 生成。同目录下另有发布用的标题、短简介与长简介 |
 | [宣传片/](宣传片/README.md) | 105 秒 1080p 宣传片。配音用本机 index-tts 与“麦克阿瑟”音色，画面取自实机截屏。重跑 3 步：`提参考音.py`、`配音.py`、`合成.py` |
 | 地图/plots.geojson · mapdata.js · tools/build_map.py | 待建。正式管线产物，眼下可直接用编辑器的“导出 GeoJSON”充当第一版 |
 
