@@ -19,7 +19,7 @@
      （合入是「覆盖真源」的动作；两个仓虽是 git 仓库，也不拿它当兜底，所以备份是硬要求）
   5. 写真源：两张 PNG 覆盖；`台账.json` 以真源那份为底，只换 `plots`／`districts` 与
      `counts.covered_cells`，重算 `base_tag`
-  6. 重生成 `地图编辑器/js/data.js`（走 `tools/editor_data.py`，与 build_raster 同一写入口）
+  6. 重生成 `地图编辑器/js/data.js`（走 `地图/栅格地形数据生成器/editor_data.py`，与 build_raster 同一写入口）
   7. 打印摘要
 """
 from __future__ import annotations
@@ -36,6 +36,12 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None
 
+# ⚠️ 路径表（mapdata）与底图指纹（basetag）在 **地图/栅格地形数据生成器/** 里 ——
+#    2026-10-10 地形流程那一整包搬去了那里，本文件留在 tools/（它做的是行政图那半）。
+#    所以先把那一包挂上 sys.path，再 import 它里面的共用模块。
+_GEN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "地图", "栅格地形数据生成器")
+sys.path.insert(0, _GEN)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mapdata import ROOT, RASTER, STAGING                       # noqa: E402
 from basetag import base_tag as make_base_tag                   # noqa: E402
@@ -108,7 +114,7 @@ def validate(meta, ledger):
     cur_tag = meta.get("base_tag") or _tag_of(meta)
     if ledger.get("based_on") != cur_tag:
         errs.append(f"草稿是基于旧底图改的：草稿 based_on={ledger.get('based_on')!r}，"
-                    f"真源当前 base_tag={cur_tag!r}。请重做（或先重跑 build_raster 再改）。")
+                    f"真源当前 base_tag={cur_tag!r}。请重做（或先重跑 生成.py 再改）。")
 
     districts = ledger.get("districts") or []
     has_local = any("local" in b for b in districts)
@@ -213,7 +219,7 @@ def validate(meta, ledger):
 
 
 def _legend(meta) -> list:
-    """算 base_tag 用的图例摘要：**覆盖 + 形态**（与 build_raster.legend_tag 同一口径）；
+    """算 base_tag 用的图例摘要：**覆盖 + 形态**（与 生成.py 的 legend_tag 同一口径）；
     旧台账（v2 及以前）没有 cover_legend，回退读 terrain_legend。"""
     if "cover_legend" in meta:
         return ([meta["cover_legend"][str(i)] for i in range(len(meta["cover_legend"]))]
@@ -304,9 +310,9 @@ def main() -> int:
     print(f"  已换入 {F_PLOT}、{F_DIST} ｜ 已更新 {F_META}（地块 {len(plots)} ｜ 分区 {len(districts)}）")
 
     # ---------------- 6. 重生成 data.js（与 build_raster 同一写入口） ----------------
-    from build_editor import load_palette
+    from 附录C import load_palette
     pal = load_palette()
-    # 与 build_raster 收尾那一步**调同一个构造函数**：两边各拼一份 payload 必然分叉
+    # 与 生成.py 收尾那一步**调同一个构造函数**：两边各拼一份 payload 必然分叉
     # （实测 import_editor 那份漏了 block_rule、键序也不同）。见 editor_data.payload_from_meta。
     p = ED.write_data_js(ED.payload_from_meta(meta, pal), APP)
     print(f"  已重写 {os.path.relpath(p, ROOT)}")

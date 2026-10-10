@@ -9,7 +9,7 @@
   由若干基础单元组成。初始种子：中华 = 按「市」归并（一市一地块）；其他 = 一单元一地块。
   编辑器里可再归并/拆分/改名/指派地缘地域。
 
-    python tools/build_editor.py --dump-units    # → 地图数据/基础单元.json（给 build_raster 栅格化）
+    python tools/build_editor.py --dump-units    # → 地图数据/基础单元.json（给 生成.py 栅格化）
     python tools/build_editor.py --no-world      # 只做中华（数据小时调试用）
     python tools/build_editor.py --dp 3          # 量化精度（0.001°，约 111 m）
 
@@ -28,6 +28,13 @@ import zipfile
 from datetime import date
 
 import shapefile
+# ⚠️ 路径表（mapdata）与底图指纹（basetag）在 **地图/栅格地形数据生成器/** 里 ——
+#    2026-10-10 地形流程那一整包搬去了那里，本文件留在 tools/（它做的是行政图那半）。
+#    所以先把那一包挂上 sys.path，再 import 它里面的共用模块。
+_GEN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "地图", "栅格地形数据生成器")
+sys.path.insert(0, _GEN)
+from 附录C import load_palette, APPENDIX_C          # noqa: E402
 from geo_wrap import wrap_union
 from mapdata import SCOPE_LON0, SCOPE_LON1, SCOPE_LAT0, SCOPE_LAT1
 from mapdata import (ROOT, DATA_DIR, under, UNITS as UNITS_JSON,
@@ -43,8 +50,6 @@ GADM = GADM_CN3
 NE1 = NE_ADM1
 NE0 = NE_COUNTRIES
 OUT_UNITS = UNITS_JSON
-APPENDIX_C = os.path.join(ROOT, "附录C-世界地域清单.md")
-
 CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
@@ -96,7 +101,7 @@ OCEANIA = {"AU","NZ","PG","FJ","SB","VU","NC","PF","WS","TO","KI","NR","TV","FM"
 # 那次重构里被删了。这里只留**实测需要的那三条**——小、稳定、一眼看得懂。
 ADMIN_ZH = {"Macau": "澳门", "Ilhas": "澳门离岛", "NA": "香港"}
 RU_ASIA_LON = 58.0       # 俄罗斯以此经度为界，只留乌拉尔以东（北荒/辽海）
-# 世界窗口与格边长：**唯一出处是 tools/mapdata.py**（build_raster 用的是同一份）。
+# 世界窗口与格边长：**唯一出处是 地图/栅格地形数据生成器/mapdata.py**（生成.py 用的是同一份）。
 LON0, LON1 = SCOPE_LON0, SCOPE_LON1
 LAT0, LAT1 = SCOPE_LAT0, SCOPE_LAT1
 
@@ -111,21 +116,8 @@ def keep_unit(iso: str, iso2: str, lon: float) -> bool:
     return iso2 == "US-HI"                        # 夏威夷（沧溟·夏威域）
 
 
-def load_palette():
-    with open(APPENDIX_C, encoding="utf-8") as f:
-        lines = f.read().splitlines()
-    out, cur = [], None
-    import re
-    for ln in lines:
-        m = re.match(r"^##\s*C\d+\.\s*(.+?)（", ln)
-        if m:
-            cur = {"geo": m.group(1).strip(), "domains": []}
-            out.append(cur)
-            continue
-        m = re.match(r"^\|?\s*([^\s|]+域)\s*\|", ln)
-        if m and cur is not None and m.group(1) not in cur["domains"]:
-            cur["domains"].append(m.group(1))
-    return [g for g in out if g["domains"]]
+# `load_palette()` 与 APPENDIX_C 2026-10-10 搬进 `地图/栅格地形数据生成器/附录C.py`
+# （生成器要读它，行政侧跟着从这里 import —— 依赖方向就顺了）。
 
 
 def polygonal(g):
@@ -268,7 +260,7 @@ def build_world(dp: int, country_zh: dict | None = None):
         # 窗口外的单元整块丢掉（不留"零像元地块"）。`wrap_union` 只在两条经缝上切，
         # 管不了纬度，所以这里按包围盒再判一次。裁之前逐个核过：被丢的都是附录C 范围外
         # 的孤岛（皮特凯恩、5 个南极圈外无人岛），且**没有任何保留单元横跨窗口边**
-        # ——否则会被切掉一角而不是整块丢。见 tools/mapdata.py 的 SCOPE_* 注释。
+        # ——否则会被切掉一角而不是整块丢。见 地图/栅格地形数据生成器/mapdata.py 的 SCOPE_* 注释。
         bx = gg.bounds
         if bx[2] < LON0 or bx[0] > LON1 or bx[3] < LAT0 or bx[1] > LAT1:
             dropped += 1
@@ -298,7 +290,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dp", type=int, default=3)
     ap.add_argument("--no-world", action="store_true")
-    ap.add_argument("--dump-units", action="store_true", help="另存 地图/地图数据/基础单元.json（供 build_raster.py 栅格化）")
+    ap.add_argument("--dump-units", action="store_true", help="另存 地图/地图数据/基础单元.json（供 生成.py 栅格化）")
     args = ap.parse_args()
 
     for p in (GADM, NE1):
@@ -369,8 +361,8 @@ def main() -> int:
         print(f"单元已导出 {OUT_UNITS}  {os.path.getsize(OUT_UNITS)/1048576:.2f} MB")
 
     # 旧矢量编辑器（地图编辑器.html + tools/editor_template.html）已废弃并删除：
-    # 本脚本现在的唯一产物就是 基础单元.json，交给 build_raster.py 栅格化。
-    print("单元已导出，下一步：python tools/build_raster.py")
+    # 本脚本现在的唯一产物就是 基础单元.json，交给 生成.py 栅格化。
+    print("单元已导出，下一步：python 地图/栅格地形数据生成器/生成.py")
     return 0
 
 

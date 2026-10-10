@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""底图指纹 `base_tag` —— `build_raster.py` 与 `import_editor.py` 的**共用**实现。
+"""底图指纹 `base_tag` —— `生成.py` 与 `import_editor.py` 的**共用**实现。
 
 为什么必须共用（工单 §3.3）：这张指纹是"本地增量存档还作不作数"的判据，也是
 `import_editor.py` 拒绝旧草稿的依据（草稿的 `based_on` 必须等于真源当前指纹）。

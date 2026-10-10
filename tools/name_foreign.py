@@ -42,6 +42,12 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+# ⚠️ 路径表（mapdata）与底图指纹（basetag）在 **地图/栅格地形数据生成器/** 里 ——
+#    2026-10-10 地形流程那一整包搬去了那里，本文件留在 tools/（它做的是行政图那半）。
+#    所以先把那一包挂上 sys.path，再 import 它里面的共用模块。
+_GEN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "地图", "栅格地形数据生成器")
+sys.path.insert(0, _GEN)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mapdata import FOREIGN_DIR, under                      # noqa: E402
 

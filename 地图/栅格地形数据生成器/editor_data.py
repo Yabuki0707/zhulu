@@ -2,7 +2,7 @@
 """`地图编辑器/js/data.js` 的唯一写入口。
 
 为什么单独一个模块：这份文件现在由**两条路**共同维护——
-`tools/build_raster.py`（管线重建后写）与 `tools/import_editor.py`（编辑器草稿合入后写）。
+`地图/栅格地形数据生成器/生成.py`（管线重建后写）与 `tools/import_editor.py`（编辑器草稿合入后写）。
 两边各写一遍必然分叉（旧账就是把编辑器数据拷一份到 `地图编辑器/data/`，
 靠"每次构建时拷贝"保持一致，见 `docs/adr/0002`）。所以生成逻辑收在这里，两边都调它。
 
@@ -30,13 +30,13 @@ LAYERS = {
     "ref_vec": "参考顶点.bin",
 }
 
-HEADER = ("/* 由 tools/editor_data.py 生成（build_raster.py / import_editor.py 都调它），勿手改 */\n")
+HEADER = ("/* 由 地图/栅格地形数据生成器/editor_data.py 生成（生成.py / import_editor.py 都调它），勿手改 */\n")
 
 
 def payload_from_meta(meta: dict, palette: list) -> dict:
     """`台账.json` + 调色板 → data.js 的 payload。**两个写入方都调这一个函数。**
 
-    为什么必须收成一处：`build_raster`（管线重建后写）与 `import_editor`（草稿合入后写）
+    为什么必须收成一处：`生成.py`（管线重建后写）与 `import_editor`（草稿合入后写）
     原先各自拼一份 payload，于是**同一份台账会写出两份键不同的 data.js**——实测的区别是
     `import_editor` 那份漏了 `block_rule`、键序也不同。这两个键眼下没有 JS 消费者（是给人看
     的口径说明），所以漏了不报错，但"两份产物必然分叉"这件事本身就是 `docs/adr/0002` 要禁的
@@ -76,16 +76,16 @@ def payload_from_meta(meta: dict, palette: list) -> dict:
 def write_from_meta(meta_path: str, app_dir: str | None = None) -> tuple[str, str]:
     """从 `台账.json` **原地重写** data.js。→ (写出的路径, base_tag)。
 
-    为什么单独有这个入口：改了显示类的名字或配色（`tools/display_class.py`）之后，
+    为什么单独有这个入口：改了显示类的名字或配色（`地图/栅格地形数据生成器/display_class.py`）之后，
     真源那几张图**一个字节都不用变**，要变的只有 data.js。跑一遍完整管线（读 ETOPO、
     LC100、柯本，十几分钟）只为刷新一张查表，纯属浪费；而"从台账重算"的路径与
-    `build_raster` 收尾那一步调的是同一个函数，产物一致。
-    用法：`python tools/editor_data.py`
+    `生成.py` 收尾那一步调的是同一个函数，产物一致。
+    用法：`python 地图/栅格地形数据生成器/editor_data.py`
     """
     import json                                                       # noqa: E402
     import os                                                         # noqa: E402
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from build_editor import load_palette                             # noqa: E402
+    from 附录C import load_palette                             # noqa: E402
     with open(meta_path, encoding="utf-8") as f:
         meta = json.load(f)
     path = write_data_js(payload_from_meta(meta, load_palette()), app_dir)

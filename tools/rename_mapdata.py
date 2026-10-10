@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""一次性迁移：把 地图/地图数据/ 下的目录与文件改成中文名（与 tools/mapdata.py 对齐）。
+"""一次性迁移：把 地图/地图数据/ 下的目录与文件改成中文名（与 地图/栅格地形数据生成器/mapdata.py 对齐）。
 
     python tools/rename_mapdata.py --dry       # 只看会怎么改
     python tools/rename_mapdata.py             # 真改
@@ -15,6 +15,12 @@ import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ⚠️ 路径表（mapdata）与底图指纹（basetag）在 **地图/栅格地形数据生成器/** 里 ——
+#    2026-10-10 地形流程那一整包搬去了那里，本文件留在 tools/（它做的是行政图那半）。
+#    所以先把那一包挂上 sys.path，再 import 它里面的共用模块。
+_GEN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "地图", "栅格地形数据生成器")
+sys.path.insert(0, _GEN)
 from mapdata import DATA_DIR                      # noqa: E402
 
 J = os.path.join
